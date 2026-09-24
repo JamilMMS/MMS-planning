@@ -1,0 +1,87 @@
+# MMS October 2026 MBC plan — all tunable parameters. See docs/OPEN_ISSUES.md for defaults.
+
+budget:
+  total_usd: 1000000.00
+  min_utilisation: 0.98          # spend at least 98% of budget
+  rates_are: gross               # grid rates treated as gross
+  aed_per_usd: 3.6725
+
+flight:
+  start: 2026-10-04
+  end: 2026-10-31
+  weekly_share_min: 0.20         # each of the 4 weeks gets 20–30% of spend
+  weekly_share_max: 0.30
+
+target:
+  buying_target: "TP Arabs 15+"
+  base_audience: "TP Arabs 15+"  # replace when a separate GRP base is provided
+  universe: 11110000             # INFERRED — replace with official eTAM Universe
+  universe_is_official: false
+
+grid:
+  path: data/raw/grid/october_grid.xlsx
+  mbc1_week4: carry_forward_wk3  # options: carry_forward_wk3 | exclude
+  spot_length_sec: 30
+
+etam:
+  break_files_glob: data/raw/etam/*.xlsx
+  exclude_event_days: true
+  low_sample_zero_share: 0.50    # channel flagged if >50% of breaks rate zero
+
+forecast:
+  min_breaks: 6
+  time_tolerance_min: 30
+  weekday_groups: [[Sun, Mon, Tue, Wed], [Thu], [Fri], [Sat]]
+  estimator: trimmed_mean_10     # or median
+  live_policy: slot_baseline_excl_events
+  seasonality_trend: false
+  quantiles: [0.10, 0.50, 0.90]
+  random_seed: 42
+
+reach:
+  mode: ESTIMATE                 # EXACT | CALIBRATED | ESTIMATE
+  common_weight_rule: average    # average | middle_day (confirm with Nielsen)
+  estimate_sensitivity_k: 0.30   # report plan reach at k ±30%
+
+objective:
+  recommended: max_reach_1plus   # max_reach_1plus | max_reach_3plus | max_impressions | balanced
+  run_scenarios: [max_reach_1plus, max_reach_3plus, max_impressions, balanced]
+  balanced_min_impressions_ratio: 0.90
+
+caps:
+  max_spots_per_slot: 1
+  max_spots_per_channel_per_day:
+    "MBC 1": 8
+    "MBC 2": 6
+    "MBC 4": 8
+    "MBC DRAMA": 8
+    "MBC BOLLYWOOD": 6
+    "MBC ACTION": 4
+    "MBC MAX": 4
+  max_spots_per_program_per_day: 2
+
+constraints:
+  min_trp_pct: 0                 # set after first run (e.g. 80% of S3's TRPs)
+  channel_min_share:
+    "MBC 1": 0.03
+    "MBC 2": 0.03
+    "MBC 4": 0.03
+    "MBC DRAMA": 0.03
+    "MBC BOLLYWOOD": 0.03
+    "MBC ACTION": 0.01
+    "MBC MAX": 0.01
+  channel_max_share: {}          # e.g. {"MBC 1": 0.60}
+  excluded_programs: []
+  excluded_slots: []
+
+frontier:
+  budget_levels: [0.25, 0.50, 0.75, 1.00, 1.25]
+
+rounding:
+  internal: full_precision
+  display: round_half_up
+  decimals: {rating_pct: 2, grp_pct: 1, reach_pct: 1, ots: 2, cpm: 2, usd: 0}
+
+audit:
+  tolerance_pct: 0.1
+  reach_tolerance_points: 0.1

@@ -1,0 +1,24 @@
+fixture_id,data_type,source_pdf,inputs,expected,status,note
+F01,Rating Absolute (single day),Main Data Types p5,"weights=[900,1100,1000,800]; minutes=[15,10,45,35]; duration=60",1625,ok,97500/60
+F02,Rating Absolute (multi day),Main Data Types p6,"d1 weights=[900,1100,1000,800] minutes=[15,10,45,35]; d2 weights=[950,1200,1300,900] minutes=[20,40,9,36]; duration=60 per day",1738.33,ok,208600/120
+F03,Rating %,Main Data Types p7,"rating_abs=1625; universe=20000000",0.008125,ok,printed as 0.008%
+F04,Share of Audience %,Main Data Types p10,"rating_abs=1625; total_tv=76000",2.138,ok,printed 2.14%
+F05,Share to Selected %,Main Data Types p11,"channel=1625; selected=[1540,3960,2105,3640,2835,3005,1625,450,5255,1060,1200,1105,2010,2350,905]",4.9175,ok,printed 4.9%
+F06,Average Daily Reach (multi day),Main Data Types p13,"day1 reach=3800; day2 reach=4350",4075,ok,
+F07,Average Weekly Reach,Main Data Types p15,"week1=4900; week2=5650",5275,ok,
+F08,Frequency (single day),Main Data Types p26,"weights=[900,1200,850,700,1400]; freq=[2,2,1,1,1]",1.4158,ok,7150/5050 printed 1.4
+F09,Frequency (multi day),Main Data Types p27,"weighted exposures=12450; reach=6150",2.0244,ok,printed 2.0
+F10,TSV Universe (Daily),Main Data Types p28,"rating_abs=1158.33; duration_min=60; universe=20000000",0.003475,ok,printed 0.0035
+F11,TSV Viewers (Daily),Main Data Types p30,"rating_abs=1158.33; duration_min=60; avg_daily_reach=3000",23.17,ok,printed 23.16
+F12,Completion Rate,Main Data Types p34,"rating_abs=1625; reach=3800",42.76,ok,printed 42.8%
+F13,Average Daily TRP %,Main Data Types p37,"avg_daily_trp_abs=3178009782; universe=20335350",15628.01,ok,
+F14,Average Weekly TRP %,Main Data Types p39,"avg_weekly_trp_abs=22994225336; universe=20335350",113075.2,erratum,PDF prints 15628.01 (copied from daily)
+F15,Rating Absolute (program single day),Main Data Types p44,"weights=[900,1200,1100,1000]; minutes=[15,20,15,10]; duration=30",2133.33,ok,64000/30
+F16,Rating Absolute (program multi day),Main Data Types p45,"sum w*t=112000; duration=60",1866.67,ok,printed 1867
+F17,Share of Audience % (program),Main Data Types p48,"rating_abs=2133; total_tv=64000",3.333,ok,
+F18,Reach N+ (single day dayparts),Main Data Types p23,"1+=3400; 2+=2700; 3+=1800 (see PDF viewing table)","1+=3400;2+=2700;3+=1800",ok,rebuild from the PDF table as an integration test
+F19,GRP Absolute (spots),Main Data Types p81,"spot day1 viewers=[900,1200,1100,1000]; spot day2 viewers=[950,1100,1300,1050]",8600,ok,daily weights
+F20,GRP %,Main Data Types p82,"grp_abs=[60800,120800,150000,200440]; universe=20000000",2.6602,ok,printed 2.66%
+F21,OTS,Main Data Types p92,"grp_abs=15300; reach=3800",4.0263,erratum,PDF prints 4.02 (truncation?) - confirm rounding rule
+F22,Unduplicated Reach % (multi day),Main Data Types p19,"reach=4775; universe=20000000",0.023875,ok,printed 0.024%
+F23,TRP Absolute = Rating Abs x minutes (eTAM break file),PRELIMINARY_FINDINGS,"row: rating 0.48%, break 03:06:09-03:08:28 (140 s incl. both ends), TRP_abs 125241","rating_abs = 125241*60/140 = 53675",ok,project-specific invariant; median ratio over dataset must be 1.00 +/- 0.01
