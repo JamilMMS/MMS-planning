@@ -13,12 +13,49 @@ F11,TSV Viewers (Daily),Main Data Types p30,"rating_abs=1158.33; duration_min=60
 F12,Completion Rate,Main Data Types p34,"rating_abs=1625; reach=3800",42.76,ok,printed 42.8%
 F13,Average Daily TRP %,Main Data Types p37,"avg_daily_trp_abs=3178009782; universe=20335350",15628.01,ok,
 F14,Average Weekly TRP %,Main Data Types p39,"avg_weekly_trp_abs=22994225336; universe=20335350",113075.2,erratum,PDF prints 15628.01 (copied from daily)
-F15,Rating Absolute (program single day),Main Data Types p44,"weights=[900,1200,1100,1000]; minutes=[15,20,15,10]; duration=30",2133.33,ok,64000/30
-F16,Rating Absolute (program multi day),Main Data Types p45,"sum w*t=112000; duration=60",1866.67,ok,printed 1867
-F17,Share of Audience % (program),Main Data Types p48,"rating_abs=2133; total_tv=64000",3.333,ok,
+F15,Rating Absolute (program single day),Main Data Types p43,"weights=[900,1200,1100,1000]; minutes=[15,20,15,10]; duration=30",2133.33,ok,64000/30
+F16,Rating Absolute (program multi day),Main Data Types p44,"sum w*t=112000; duration=60",1866.67,ok,printed 1867
+F17,Share of Audience % (program),Main Data Types p47,"rating_abs=2133; total_tv=64000",3.333,ok,
 F18,Reach N+ (single day dayparts),Main Data Types p23,"1+=3400; 2+=2700; 3+=1800 (see PDF viewing table)","1+=3400;2+=2700;3+=1800",ok,rebuild from the PDF table as an integration test
 F19,GRP Absolute (spots),Main Data Types p81,"spot day1 viewers=[900,1200,1100,1000]; spot day2 viewers=[950,1100,1300,1050]",8600,ok,daily weights
 F20,GRP %,Main Data Types p82,"grp_abs=[60800,120800,150000,200440]; universe=20000000",2.6602,ok,printed 2.66%
 F21,OTS,Main Data Types p92,"grp_abs=15300; reach=3800",4.0263,erratum,PDF prints 4.02 (truncation?) - confirm rounding rule
 F22,Unduplicated Reach % (multi day),Main Data Types p19,"reach=4775; universe=20000000",0.023875,ok,printed 0.024%
 F23,TRP Absolute = Rating Abs x minutes (eTAM break file),PRELIMINARY_FINDINGS,"row: rating 0.48%, break 03:06:09-03:08:28 (140 s incl. both ends), TRP_abs 125241","rating_abs = 125241*60/140 = 53675",ok,project-specific invariant; median ratio over dataset must be 1.00 +/- 0.01
+F24,TRP % (daypart hourly sum),Main Data Types p8,"rating_pct=[7.16,4.95,4.13,3.81,3.71,3.94,3.79,4.63,7.12,9.41,11.55,13.82,13.63,14.40,14.89,16.29,16.76,16.20,16.85,16.60,16.74,14.80,11.23,8.71]",255.12,erratum,PDF prints 255.33; its 24 formula terms sum to 255.12 and its table (14:00 = 13.02 not 13.82) to 254.32
+F25,Average Daily Reach %,Main Data Types p14,"reach=[3800,4350]; universe=20000000",0.020375,ok,printed 0.02%
+F26,Unduplicated Reach (spots single day),Main Data Types p83,"weights={A:900,B:1100,C:1000,D:800}; items=[A|B|C,B|C|D,C|D,C|D]",3800,ok,respondent-level rebuild
+F27,Unduplicated Reach (dayparts multi day common weights),Main Data Types p18,"daily_weights={A:900/950,B:1100/1200,C:1000/1300,D:800/900,E:_/700}; items=[A|B|C,B|C|D,C|D,C|D,A|B|C,B|C,C|D,D|E]; rule=average",4775,ok,common weight = mean of daily weights; E viewed on day 2 only so weight 700
+F28,Unduplicated Reach (spots multi day),Main Data Types p84,"daily_weights={A:900/950,B:1100/1200,C:1000/1300,D:800/900,E:_/700}; items=[A|B|C,B|C|D,C|D,C|D,A|B|C,B|C,C|D,D|E]; rule=average",4775,erratum,PDF prints 4825 using (1100+1300)/2 for person C who weighs 1000 on 20 May; identical data on p18 gives 4775
+F29,Cume Reach (RF) (dayparts multi day),Main Data Types p21,"daily_weights={A:900/950,B:1100/1200,C:1000/_,D:800/_,E:_/1300,F:_/900}; lines=[A|B|C|D,A|B|E|F]; rule=average; scope=to_date","[3800,6075]",ok,line 1 evaluated with 28/03 weights only; line 2 with two-day average weights (see p87 for the opposite convention)
+F30,Cume Reach % (RF),Main Data Types p22,"reach=6075; universe=20000000",0.030375,ok,printed 0.03%
+F31,Cume Reach (RF) (program single day),Main Data Types p57,"weights={A:900,B:1200,C:1000,D:1100,E:1400}; lines=[A|B|C,B|C|D,A|D,B|E]","[3100,4200,4200,5600]",ok,respondent-level rebuild
+F32,Incremental Reach (program single day),Main Data Types p57 + Glossary p24,"cume=[3100,4200,4200,5600]","[3100,1100,0,1400]",ok,derived from the printed Cume Reach lines; line above line 1 = 0
+F33,Cume Reach (RF) (program multi day),Main Data Types p58,"daily_weights={A:900/950,B:1200/900,C:1000/1000,D:1100/1100,E:1400/_,F:_/1300}; lines=[A|B|C|D|E,A|B|C|D|F]; rule=average; scope=to_date","[5600,6775]",ok,PDF formula text omits the 1400 term but prints the correct 6775; per-day reach 5600 / 5250
+F34,Cume Reach (RF) (spots multi day),Main Data Types p87,"weights={A:925,B:1100,C:1150,D:850,E:700}; lines=[A|B|C,B|C|D,C|D,C|D,A|B|C,B|C,C|D,D|E]","[3175,4025,4025,4025,4025,4025,4025,4725]",ok,average weights applied from line 1 (contrast p21/p58)
+F35,Incremental Reach (spots multi day),Main Data Types p87 + Glossary p24,"cume=[3175,4025,4025,4025,4025,4025,4025,4725]","[3175,850,0,0,0,0,0,700]",ok,derived from the printed Cume Reach lines
+F36,Reach N+ (dayparts multi day),Main Data Types p24,"daily_weights={A:700/750,B:1000/1100,C:800/850,D:900/950}; items=[A|B|C,B|C,C|D,B|D,A|C,B|C,C|D,A|B]; rule=average","1+=3525;2+=3525;3+=3525;4+=1875",erratum,PDF prints 4+ = 725+1050+825 = 2600 but person A (725) has 3 exposures; correct 4+ = B+C = 1875; same on p62 (legend there also shows 920 for D instead of 925)
+F37,Reach N (program single day),Main Data Types p60,"weights={A:700,B:1000,C:800,D:900}; items=[A|B|C,B|C,C|D,B|D]","1=700;2=900;3=1800",erratum,PDF prints Total 9900 = sum of per-program reach 2500+1800+1700+1900 (which is 7900 = gross contacts) - not Reach N
+F38,Reach N+ (spots single day),Main Data Types p89,"weights={A:900,B:1100,C:1000,D:800}; items=[A|B|C,B|C|D,C|D,C|D]","1+=3800;2+=2900;3+=1800",erratum,PDF prints 2+ = 1100+1000+800 = 2800 (should be 2900); p91 2+% 0.014% propagates it; exposure 4 weight list shows a spurious 1800
+F39,Reach N+ (spots multi day),Main Data Types p90,"weights={A:925,B:1100,C:1150,D:850,E:700}; items=[A|B|C,B|C|D,C|D,C|D,A|B|C,B|C,C|D,D|E]","1+=4725;2+=4025;3+=3100",ok,printed values correct; the formula labels (725+1050...) are copied from p24
+F40,Reach N+ %,Main Data Types p25,"reach=[3400,2700,1800]; universe=20000000","1+=0.017;2+=0.0135;3+=0.009",ok,
+F41,Frequency (dayparts multi day respondent),Main Data Types p27,"daily_weights={A:900/1000,B:1200/1100,C:850/_,D:700/_,E:1400/_,F:_/1100}; exposures={A:4,B:4,C:1,D:1,E:1,F:1}; rule=average",2.024390,ok,respondent rebuild of F09; printed 2.0
+F42,Frequency (program multi day),Main Data Types p64,"daily_weights={A:900/950,B:1100/1000,C:800/1000,D:1000/1100}; exposures={A:3,B:2,C:1,D:1}; rule=average",1.738854,erratum,PDF table prints sum(w*f) = 9825 (correct 6825); 6825/3925 = 1.7389 printed 1.73 (truncated)
+F43,Average Daily Reach (program multi day respondent),Main Data Types p50,"day1={A:900,B:1200,C:1100,D:1000}; day2={A:950,B:1200,C:1000,D:1400}",4375,ok,daily weights
+F44,Average Weekly Reach (respondent weekly weights),Main Data Types p15,"week1={A:900/1000,B:1100/1000/1200,C:800,D:1300/1400,E:700}; week2={A:800/1100,B:1000/1200,C:800/1000,D:1200/1400,F:1400}",5275,ok,weekly weight = mean of the person's daily weights in the week
+F45,Average Weekly Reach %,Main Data Types p16,"reach=[4900,5650]; universe=20000000",0.026375,ok,printed 0.02% (truncated; rounding gives 0.03)
+F46,TSV Universe (Daily multi day),Main Data Types p29,"day_sum_wt=[69500,50500,58000]; duration=60; universe=20000000",0.00296667,ok,printed 0.0030
+F47,TSV Viewers (Daily multi day),Main Data Types p31,"day_sum_wt=[69500,50500,58000]; duration=60; daily_reach=[3000,3150,2700]",20.112994,ok,printed 20.12 (computed from rating rounded to 989)
+F48,TSV Universe (Weekly),Main Data Types p32,"rating_abs=[17023,23161,11079]; duration=[420,420,420]; universe=20000000",1.076523,ok,printed 1.07 (truncated); D = 60 min x 7 days per week
+F49,TSV Viewers (Weekly),Main Data Types p33,"rating_abs=[1023,1157,953]; duration=[420,420,420]; weekly_reach=[5730,6600,5925]",216.24651,ok,printed 216
+F50,TSV Viewers (Daily program multi day),Main Data Types p65,"d1 weights=[600,800,1000,600] minutes=[20,60,30,50]; d2 weights=[800,1000,1200,700] minutes=[30,30,60,12]; duration=120; daily_reach=[3000,3700]",37.970149,ok,printed 38; p65 writes 700*12 = 70 omitting the /120
+F51,Completion Rate (program multi day),Main Data Types p66,"d1 weights=[600,800,1000,600] minutes=[20,60,30,50]; d2 weights=[800,1000,1200,700] minutes=[30,30,60,12]; duration=120; daily_reach=[3000,3700]",31.641791,ok,printed 31.6%
+F52,Total Duration,Main Data Types p35,"durations_min=[36,5,90,16]",147,erratum,PDF lists 30 min for 16:30:00-17:59:59 (= 90 min) and prints 77 mins
+F53,Average Daily TRP Absolute,Main Data Types p36,"daily_trp_abs=[3181763357,3151481554,3152287899,3601011976,2932129303,3039347851,3188046532]",3178009781.714,ok,printed 3178009782
+F54,TRP % (programs),Main Data Types p46,"rating_pct=[11.8,10.2,17.5,19.4]",58.9,ok,
+F55,Rating % (program),Main Data Types p45,"sum_wt=64000; duration=30; universe=20000000",0.01066667,ok,printed 0.011%
+F56,Share to Selected % (program),Main Data Types p48,"channel=2133; selected=[1300,1100,900,850,2133,1083,900,1300,1650,800,2400,2000,850,1150]",11.582320,erratum,uses the p48 table; the printed formula lists 1000/2100/1300 instead of 1100/2133/1083 (giving 11.66); printed 11.5 = truncation of 11.58
+F57,Duplication Cume Reach,Main Data Types p74,"weights={A:900,B:1100,C:1000,D:800}; p1=A|B|C|D; p2=C|D","dup=1800;reach_p1=3800",ok,p74 formula image shows V1\V2; the correct set is V1 intersect V2 (Glossary p76)
+F58,Exclusive Cume Reach (3 programs),Main Data Types p76,"weights={A:900,B:1100,C:1000,D:800,E:1300}; p1=A|B|C; p2=C|D; p3=B|C|E","p1-p2=2000;p1-p3=900;p2-p1=800;p2-p3=800;p3-p1=1300;p3-p2=2400",ok,viewers as drawn; the 10:30 weights column lists an extra 800 that would contradict p2-p1=800
+F59,GRP Absolute (from exposure counts),Main Data Types p92,"weights={A:900,B:1100,C:1000,D:800}; exposures={A:3,B:2,C:8,D:3}",15300,ok,OTS numerator; single day so daily weights = common weights
+F60,Rating Absolute (combine daily ratings),Main Data Types p6 + Glossary p8,"ratings=[1625,1851.6666667]; durations=[60,60]",1738.3333,ok,duration-weighted average of daily ratings = F02 (aggregated path valid)
