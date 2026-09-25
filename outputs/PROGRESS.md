@@ -14,7 +14,7 @@ Last updated: 2026-09-25 (session 1)
 | 4 Forecast + back-test -> slot_forecast.parquet, backtest_report.md | audience-forecaster (opus) | BUILT + back-tested (plan error -2.7%, coverage 80.6%); Oct forecast PROVISIONAL until Gate 2 corrections, re-run with `python -m optimizer.forecast.run --final` |
 | 5 Reach engine (ESTIMATE now; EXACT/CALIBRATED behind same interface) | reach-modeler (opus) | DONE (ESTIMATE fitted; EXACT/CALIBRATED ready; 35 tests) |
 | GATE 3 | human | pending |
-| 6 Optimization S1–S4 + frontier + constraint verification | optimizer (opus) | IN PROGRESS (build + provisional run on provisional forecast) |
+| 6 Optimization S1–S4 + frontier + constraint verification | optimizer (opus) | BUILT; provisional run done (S1–S4 + frontier all constraints PASS). Re-run after final forecast: `python -m optimizer.plan.run` (~12 min) |
 | 7 Independent audit (audit/, never reads src/optimizer) | auditor (sonnet) | waiting |
 | GATE 4 | human | pending |
 | 8 Deliverables per ACCEPTANCE_CRITERIA.md | reporter (haiku) | waiting |
@@ -41,3 +41,9 @@ Last updated: 2026-09-25 (session 1)
 - Confidentiality check: git history clean (no data/, outputs/, xlsx, pdf, parquet ever committed).
 - Phase 3 review sheet sorted by $ at stake; ~64/154 titles expected to match; new program is valid.
 - After Phase 4: also export outputs/slot_forecast_for_app.json for the self-serve tool.
+
+## Queued for Gate 3 (after Gate 2 corrections are applied and forecast re-run)
+- Back-test: plan-level impressions error -2.7% (count) / +0.2% (cost); WMAPE 28%; coverage 80.6%.
+- Reach curve form decision (hyperbolic vs negexp): data cannot discriminate; show both.
+- Provisional S1–S4 nearly identical (reach model depends only on per-channel GRPs + Sainsbury); daily caps bind on most days.
+- ESTIMATE reach 1+ ~69% looks high: Sainsbury independence + Rmax assumptions (E1/E2). Flag as key risk.
