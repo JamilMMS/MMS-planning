@@ -50,7 +50,7 @@ forecast:
   seasonality_trend: false
   quantiles: [0.10, 0.50, 0.90]
   random_seed: 42
-  # --- added Phase 4 (audience-forecaster); see src/optimizer/forecast/METHOD.md -----------------
+  # --- added Phase 4 (audience-forecaster); method: src/optimizer/forecast/core.py docstring ------
   shrinkage_k: 6                 # empirical-Bayes pseudo-count k: est = (n*x_level + k*x_parent)/(n + k)
                                   # (n = evidence breaks at the level, x_parent = the next level's estimate)
   min_match_confidence: 0.0      # program_map matches below this confidence skip the program level
@@ -66,12 +66,16 @@ forecast:
     late: [1440, 1680]           # 24:00-27:59 (grid slots may wrap to 27:14)
   low_sample_policy: channel_daypart   # low_sample_channel channels (ACTION, MAX): channel_daypart = pooled
                                         # over all days | channel_daypart_daytype = split by day_types
+  low_sample_estimator: mean    # (back-test chosen 2026-09-25; was null) estimator for low-sample channels; null = forecast.estimator. On zero-inflated
+                                  # channels (>50% zero breaks) median = 0 and trimmed_mean_10 is ~47% below the
+                                  # mean; the pooled level has hundreds of breaks, so `mean` is stable there
   live_special_patterns: ['KHALEEJI', '\bCUP\b', '\bMATCH\b', 'FIFA', 'FOOTBALL']  # is_live grid rows
                                   # whose title matches -> live sport/special -> live_policy (slot baseline
                                   # excl. events, high_uncertainty). Other is_live rows (news, morning show)
                                   # are recurring studio shows and use the normal hierarchy.
   bootstrap_n: 1000              # draws for p10/p90 (day-cluster bootstrap + slot-day predictive noise)
-  interval_widening:             # p10' = p50 - w*(p50-p10), p90' = p50 + w*(p90-p50); several flags -> max w
+  interval_widening:             # p10' = p50 - w*(p50-p10), p90' = p50 + w*(p90-p50); w = base x max(flag w)
+    base: 1.0                    # applied to every slot (back-test reports the value that gives nominal coverage)
     new_program: 1.5
     live_special: 2.0
     low_sample: 1.5
@@ -100,6 +104,8 @@ forecast:
         weekday_weekend: [[Sun, Mon, Tue, Wed, Thu], [Fri, Sat]]
       estimator: [trimmed_mean_10, median]
       time_tolerance_min: [30, 60]
+      low_sample_estimator: [null, mean]
+    tie_band: 0.0                # settings whose |plan error| is within this of the best are tied -> lowest WMAPE
 
 reach:
   mode: ESTIMATE                 # EXACT | CALIBRATED | ESTIMATE

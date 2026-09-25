@@ -29,7 +29,8 @@ where ``x_L`` is the robust estimate (``forecast.estimator``) of level L's break
 ``est_parent`` is the (itself shrunk) estimate of the next usable level. The top level is not
 shrunk. With k = 6 a program with 6 breaks is a 50/50 blend, 54 breaks -> 90% own history.
 
-Estimators (``forecast.estimator``): ``median``; ``mean``; ``trimmed_mean_P`` = mean after
+Estimators (``forecast.estimator``; low-sample channels use ``forecast.low_sample_estimator`` when
+set, else the same): ``median``; ``mean``; ``trimmed_mean_P`` = mean after
 trimming P% of the total weight at EACH end (fractional trimming, so it is exactly defined for
 the weighted bootstrap and equals ``scipy.stats.trim_mean`` whenever P% x n is an integer).
 
@@ -45,8 +46,8 @@ mean audience of the slot on one airing day, from B = ``forecast.bootstrap_n`` d
 
 Quantiles ``forecast.quantiles``; the interval is then forced to contain p50 and widened for
 flagged slots: ``p10' = max(0, p50 - w*(p50 - p10))``, ``p90' = p50 + w*(p90 - p50)`` with
-w = max over the slot's flags of ``forecast.interval_widening`` (new_program / live_special /
-low_sample). Seeds: numpy ``default_rng([random_seed, crc32(evidence key)])`` — deterministic.
+w = ``interval_widening.base`` x max over the slot's flags of ``forecast.interval_widening``
+(new_program / live_special / low_sample; 1 when unflagged). Seeds: numpy ``default_rng([random_seed, crc32(evidence key)])`` — deterministic.
 """
 from __future__ import annotations
 
@@ -74,11 +75,12 @@ class ForecastParams:
     day_types: dict[str, list[str]] = field(default_factory=lambda: {"weekday": ["Sun", "Mon", "Tue", "Wed", "Thu"], "weekend": ["Fri", "Sat"]})
     dayparts: dict[str, list[int]] = field(default_factory=lambda: {"early": [180, 360], "morning": [360, 720], "daytime": [720, 1080], "prime": [1080, 1440], "late": [1440, 1680]})
     low_sample_policy: str = "channel_daypart"
+    low_sample_estimator: str | None = None
     live_special_patterns: list[str] = field(default_factory=lambda: ["KHALEEJI", r"\bCUP\b", r"\bMATCH\b", "FIFA", "FOOTBALL"])
     quantiles: list[float] = field(default_factory=lambda: [0.10, 0.50, 0.90])
     random_seed: int = 42
     bootstrap_n: int = 1000
-    interval_widening: dict[str, float] = field(default_factory=lambda: {"new_program": 1.5, "live_special": 2.0, "low_sample": 1.5})
+    interval_widening: dict[str, float] = field(default_factory=lambda: {"base": 1.0, "new_program": 1.5, "live_special": 2.0, "low_sample": 1.5})
     high_uncertainty_rel_width: float = 2.0
     predictive_min_window_min: int = 30
 
@@ -91,6 +93,13 @@ class ForecastParams:
 
     def as_dict(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in self.__dataclass_fields__}
+
+    def estimator_for(self, low_sample: bool) -> str:
+        return (self.low_sample_estimator or self.estimator) if low_sample else self.estimator
+
+    def widening_for(self, flags: list[str]) -> float:
+        base = float(self.interval_widening.get("base", 1.0))
+        return base * max([float(self.interval_widening.get(f, 1.0)) for f in flags], default=1.0)
 
 
 def weekday_group_map(groups: list[list[str]]) -> dict[str, int]:
@@ -277,12 +286,13 @@ def pool_top_programs(mask: np.ndarray, bi: BreakIndex, top: int = 2) -> str:
 # --------------------------------------------------------------------------- one target
 def forecast_one(t: dict[str, Any], bi: BreakIndex, with_intervals: bool = True) -> dict[str, Any]:
     p = bi.p
+    est_name = p.estimator_for(bool(t.get("low_sample")))
     masks = evidence_masks(t, bi)
     raw: dict[str, tuple[float, int]] = {}
     for lvl in LEVELS:
         if lvl in masks:
             m = masks[lvl][0]
-            raw[lvl] = (robust_estimate(bi.y[m], p.estimator), int(m.sum()))
+            raw[lvl] = (robust_estimate(bi.y[m], est_name), int(m.sum()))
     usable = [l for l in LEVELS if l in raw and raw[l][1] >= p.min_breaks]
     if "channel_daypart" not in usable:  # top level always usable (it was widened to >= min or whole channel)
         usable.append("channel_daypart")
@@ -299,7 +309,7 @@ def forecast_one(t: dict[str, Any], bi: BreakIndex, with_intervals: bool = True)
     res: dict[str, Any] = {
         "forecast_level": level, "evidence_n": raw[level][1], "p50": p50,
         "raw_level_est": raw[level][0], "parent_est": parent_of_level,
-        "evidence_desc": masks[level][1],
+        "evidence_desc": masks[level][1], "estimator": est_name,
     }
     for lvl in LEVELS:
         res[f"est_{lvl}"] = raw[lvl][0] if lvl in raw else np.nan
@@ -310,13 +320,14 @@ def forecast_one(t: dict[str, Any], bi: BreakIndex, with_intervals: bool = True)
     if with_intervals:
         key = "|".join(str(t.get(k, "")) for k in ("channel", "weekday", "start_min", "end_min", "is_rerun", "etam_title", "low_sample")) + "|" + level
         p10, p90 = predictive_interval(bi, lvl_mask, p50, raw[level][0], raw[level][1], parent_of_level,
-                                       int(t["end_min"]) - int(t["start_min"]), key)
+                                       int(t["end_min"]) - int(t["start_min"]), key, est_name)
         res["p10_raw"], res["p90_raw"] = p10, p90
     return res
 
 
 def predictive_interval(bi: BreakIndex, mask: np.ndarray, p50: float, raw_est: float, n: int,
-                        parent: float | None, window_min: int, key: str) -> tuple[float, float]:
+                        parent: float | None, window_min: int, key: str, estimator: str | None = None
+                        ) -> tuple[float, float]:
     """Day-cluster bootstrap x slot-day noise; returns (q_lo, q_hi) forced to bracket p50."""
     p = bi.p
     q_lo, q_hi = p.quantiles[0], p.quantiles[-1]
@@ -331,7 +342,7 @@ def predictive_interval(bi: BreakIndex, mask: np.ndarray, p50: float, raw_est: f
     D, B = len(udays), int(p.bootstrap_n)
     counts = rng.multinomial(D, np.full(D, 1.0 / D), size=B)          # (B, D) day draws
     w = counts[:, day_idx]                                               # (B, n) break weights
-    theta = weighted_estimate(ys, w, p.estimator)
+    theta = weighted_estimate(ys, w, estimator or p.estimator)
     nb = w.sum(axis=1)
     if parent is not None and p.shrinkage_k > 0:
         theta = (nb * theta + p.shrinkage_k * parent) / (nb + p.shrinkage_k)
@@ -375,7 +386,7 @@ def forecast_targets(targets: pd.DataFrame, breaks: pd.DataFrame, p: ForecastPar
         if with_intervals:
             flags = [f for f, on in (("new_program", t.get("is_new")), ("live_special", t.get("live_special")),
                                      ("low_sample", t.get("low_sample"))) if on]
-            wf = max([p.interval_widening.get(f, 1.0) for f in flags], default=1.0)
+            wf = p.widening_for(flags)
             r["widening"] = wf
             r["p10"], r["p90"] = widen(r["p50"], r["p10_raw"], r["p90_raw"], wf)
         if keep_evidence:
