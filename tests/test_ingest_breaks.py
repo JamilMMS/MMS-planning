@@ -127,15 +127,42 @@ def test_low_sample_channel_flags(cfg):
 
 def test_is_event_flags_both_channels(cfg):
     """The 19 Sep FIFA/NADEENA football special aired simultaneously on MBC 1 AND
-    MBC ACTION -- both must be flagged, not just MBC ACTION."""
+    MBC ACTION -- both must be flagged, not just MBC ACTION. Per-channel policy (CHANGE 1):
+    MBC 1 (match_only) gets just the 8 match breaks; MBC ACTION (window) gets the whole
+    15-break anomalous-audience window built around those same match breaks."""
     _skip_if_no_breaks()
     df = load_breaks(BREAKS_PATH, cfg)
     event = df[df["is_event"]]
-    assert len(event) == 16
+    assert len(event) == 23
     assert set(event["channel"].unique()) == {"MBC 1", "MBC ACTION"}
     assert set(event["broadcast_date"].dt.date.astype(str).unique()) == {"2026-09-19"}
     assert int((event["channel"] == "MBC 1").sum()) == 8
-    assert int((event["channel"] == "MBC ACTION").sum()) == 8
+    assert int((event["channel"] == "MBC ACTION").sum()) == 15
+
+    mbc1_event = event[event["channel"] == "MBC 1"]
+    assert set(mbc1_event["event_reason"].unique()) == {"SIMULCAST_MATCH"}
+    action_event = event[event["channel"] == "MBC ACTION"]
+    assert set(action_event["event_reason"].unique()) == {"SIMULCAST_WINDOW"}
+    assert set(df.loc[~df["is_event"], "event_reason"].unique()) == {""}
+
+
+def test_event_window_attrs_for_mbc_action(cfg):
+    """The computed MBC ACTION event window (CHANGE 1) matches the worked example in
+    etam_breaks_report.md: ~14:59:46-19:24:52, 15 breaks, 5 programmes."""
+    _skip_if_no_breaks()
+    df = load_breaks(BREAKS_PATH, cfg)
+    windows = df.attrs["event_windows"]
+    assert len(windows) == 1
+    w = windows[0]
+    assert w["channel"] == "MBC ACTION"
+    assert w["broadcast_date"] == "2026-09-19"
+    assert w["n_breaks"] == 15
+    assert w["window_start_sec"] == 53986   # 14:59:46
+    assert w["window_end_sec"] == 69892     # 19:24:52
+    assert set(w["programmes"]) == {
+        "NADEENA", "FIFA AFRICAN ASIAN PACIFIC CUP 2026", "RIDICULOUSNESS",
+        "BUNDESLIGA CLUB PROFILE", "BUNDESLIGA 2026/2027",
+    }
 
 
 def test_break_id_unique_per_target(cfg):

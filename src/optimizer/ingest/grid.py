@@ -23,11 +23,22 @@ Parsing rules (see DATA_SPEC.A):
   - Some ``Program_name`` cells are non-string when the raw programme title is purely
     numeric (observed in the eTAM file, not the grid, but guarded here defensively too);
     every string column is cast with ``.astype(str)`` before any ``.str`` accessor is used.
-  - Overlaps: two rows on the same channel + air_date whose ``[start_min, end_min)`` windows
-    truly intersect (not just adjacent-in-sort-order neighbours -- the grid contains
-    "compilation" container rows, e.g. MBC BOLLYWOOD "WEEKEND DRAMA COMPILATION", whose
-    6-hour window fully contains several separately-listed component-episode rows) are
-    clustered with a union-find into an ``overlap_group`` id; rows with no overlap get -1.
+  - Overlaps (Gate 1 CHANGE 2): computed strictly **pairwise**, not as transitive-closure
+    groups. Two rows on the same channel + air_date conflict iff their ``[start_min, end_min)``
+    windows truly intersect (not just adjacent-in-sort-order neighbours -- the grid contains
+    "compilation" container rows, e.g. MBC BOLLYWOOD "WEEKEND DRAMA COMPILATION", whose 6-hour
+    window fully contains several separately-listed component-episode rows). Every conflicting
+    *pair* is emitted as one row of ``data/processed/slot_conflicts.parquet`` (columns:
+    slot_a, slot_b, channel, air_date, overlap_minutes, kind), so an umbrella row conflicts
+    with each episode row it contains, but the contained episode rows do NOT conflict with
+    each other (their own windows don't intersect -- they're back-to-back inside the umbrella).
+    ``kind`` = ``'contains'`` when one window fully contains the other, else ``'partial'``.
+    ``grid.parquet`` also gets a ``has_conflict`` bool (True iff the row appears in any pair)
+    and an ``overlap_component`` id -- a cheap union-find connected-component grouping of rows
+    that share *some* conflict, kept only for reporting/visualisation. It is explicitly NOT the
+    exclusivity rule: two rows in the same component do not necessarily conflict with each
+    other (see the BOLLYWOOD compilation case above) -- always consult ``slot_conflicts.parquet``
+    / ``has_conflict`` for buying decisions, never ``overlap_component`` membership.
   - MBC 1 week-4 gap: if ``cfg.grid.mbc1_week4 == "carry_forward_wk3"``, synthetic MBC 1 rows
     are created for the missing week by copying the most recent week MBC 1 *does* have data
     for (found generically as "the week 7 days before the missing week", not hard-coded) onto
@@ -68,37 +79,66 @@ def _split_title(raw: str) -> tuple[str, str | None]:
     return title_en, title_ar
 
 
-def _assign_overlap_groups(df: pd.DataFrame) -> pd.Series:
-    """True pairwise interval-overlap detection (not just adjacent-in-sort-order), grouped
-    per (channel, air_date), clustered with union-find. Returns an int Series aligned to
-    ``df.index``: a shared non-negative id per connected cluster of overlapping rows, -1
-    for rows that overlap nothing."""
-    parent: dict[int, int] = {idx: idx for idx in df.index}
+def find_slot_conflicts(df: pd.DataFrame) -> pd.DataFrame:
+    """Strictly pairwise slot-window conflicts within the same channel + air_date (Gate 1
+    CHANGE 2). This is NOT a transitive-closure grouping: a pair conflicts iff their
+    ``[start_min, end_min)`` windows actually intersect, computed independently for every
+    pair -- so an umbrella "compilation" row conflicts with each episode row it contains, but
+    two contained episode rows do NOT conflict with each other (their own windows are
+    back-to-back inside the umbrella, not overlapping).
 
-    def find(x: int) -> int:
+    Returns one row per conflicting pair: ``slot_a``/``slot_b`` (sorted so a pair appears
+    once), ``channel``, ``air_date``, ``overlap_minutes`` (the intersection length), and
+    ``kind`` = ``'contains'`` when one window fully contains the other, else ``'partial'``.
+    """
+    rows = []
+    for (channel, air_date), grp in df.groupby(["channel", "air_date"], sort=False):
+        items = list(grp[["slot_id", "start_min", "end_min"]].itertuples(index=False))
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                a, b = items[i], items[j]
+                if a.start_min < b.end_min and b.start_min < a.end_min:
+                    a_contains_b = a.start_min <= b.start_min and b.end_min <= a.end_min
+                    b_contains_a = b.start_min <= a.start_min and a.end_min <= b.end_min
+                    kind = "contains" if (a_contains_b or b_contains_a) else "partial"
+                    overlap_minutes = min(a.end_min, b.end_min) - max(a.start_min, b.start_min)
+                    slot_a, slot_b = sorted([a.slot_id, b.slot_id])
+                    rows.append((slot_a, slot_b, channel, air_date, int(overlap_minutes), kind))
+    return pd.DataFrame(
+        rows, columns=["slot_a", "slot_b", "channel", "air_date", "overlap_minutes", "kind"]
+    )
+
+
+def _assign_overlap_components(df: pd.DataFrame, conflicts: pd.DataFrame) -> pd.Series:
+    """Cheap union-find connected-component id over the pairwise conflicts in ``conflicts``
+    (see ``find_slot_conflicts``) -- for reporting/visualisation ONLY. This is explicitly NOT
+    the exclusivity rule: two rows sharing a component do not necessarily conflict with each
+    other (e.g. two episode rows inside the same BOLLYWOOD compilation umbrella share a
+    component with the umbrella and with each other, but the two episodes themselves do not
+    conflict -- always use ``find_slot_conflicts`` / ``has_conflict`` for buying decisions).
+    Returns an int Series aligned to ``df.index``: a shared non-negative id per connected
+    component, -1 for rows in no conflict at all."""
+    parent: dict[str, str] = {sid: sid for sid in df["slot_id"]}
+
+    def find(x: str) -> str:
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
-    def union(a: int, b: int) -> None:
+    def union(a: str, b: str) -> None:
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[ra] = rb
 
-    for _, grp in df.groupby(["channel", "air_date"], sort=False):
-        rows = list(grp[["start_min", "end_min"]].itertuples())
-        for i in range(len(rows)):
-            for j in range(i + 1, len(rows)):
-                a, b = rows[i], rows[j]
-                if a.start_min < b.end_min and b.start_min < a.end_min:
-                    union(a.Index, b.Index)
+    for r in conflicts.itertuples():
+        union(r.slot_a, r.slot_b)
 
-    roots = df.index.map(find)
-    sizes = pd.Series(roots).value_counts()
+    roots = df["slot_id"].map(find)
+    sizes = roots.value_counts()
     real_roots = sizes[sizes > 1].index
-    group_id = {root: gid for gid, root in enumerate(sorted(real_roots))}
-    return pd.Series([group_id.get(r, -1) for r in roots], index=df.index, dtype="int64")
+    comp_id = {root: cid for cid, root in enumerate(sorted(real_roots))}
+    return pd.Series([comp_id.get(r, -1) for r in roots], index=df.index, dtype="int64")
 
 
 def _find_carry_forward_week(g: pd.DataFrame, channel_col: str = "channel") -> tuple[int, int] | None:
@@ -246,26 +286,21 @@ def load_grid(path: str | Path, cfg: dict[str, Any]) -> pd.DataFrame:
 
     assert g["slot_id"].is_unique, "slot_id must remain unique after synthetic rows are added"
 
-    # --- overlaps (recomputed after any synthetic rows, since they land on new dates) ---
-    g["overlap_group"] = _assign_overlap_groups(g)
+    # --- conflicts (recomputed after any synthetic rows, since they land on new dates) ---
+    # Strictly pairwise (Gate 1 CHANGE 2) -- see find_slot_conflicts / _assign_overlap_components
+    # docstrings. slot_conflicts is the exclusivity table; overlap_component/has_conflict on
+    # grid.parquet are derived from it for convenience.
+    slot_conflicts = find_slot_conflicts(g)
+    g["overlap_component"] = _assign_overlap_components(g, slot_conflicts)
+    conflicted_ids = set(slot_conflicts["slot_a"]).union(slot_conflicts["slot_b"])
+    g["has_conflict"] = g["slot_id"].isin(conflicted_ids)
 
     g.attrs["n_pre_flight_rows"] = n_pre_flight
     g.attrs["n_carry_forward_rows"] = carry_forward_rows
     g.attrs["carry_forward_weeks"] = carry_forward_weeks
+    g.attrs["slot_conflicts"] = slot_conflicts
 
     return g.reset_index(drop=True)
-
-
-def find_overlaps(g: pd.DataFrame) -> pd.DataFrame:
-    """Return one row per pair of overlapping slot_ids, for reporting. Derived from
-    ``overlap_group``: every group of size k contributes C(k,2) pairs."""
-    out = []
-    for gid, grp in g[g["overlap_group"] >= 0].groupby("overlap_group"):
-        ids = sorted(grp["slot_id"].tolist())
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                out.append((gid, ids[i], ids[j]))
-    return pd.DataFrame(out, columns=["overlap_group", "slot_a", "slot_b"])
 
 
 if __name__ == "__main__":
@@ -279,7 +314,9 @@ if __name__ == "__main__":
     g = load_grid(path, cfg)
     print("rows", len(g))
     print(pd.crosstab(g["channel"], g["week"]))
-    print("distinct overlap groups", int((g["overlap_group"] >= 0).sum() and g.loc[g.overlap_group >= 0, "overlap_group"].nunique()))
+    conflicts = g.attrs["slot_conflicts"]
+    print("conflict pairs", len(conflicts), "distinct components",
+          int(g.loc[g["overlap_component"] >= 0, "overlap_component"].nunique()))
     print("reruns", int(g.is_rerun.sum()), "live", int(g.is_live.sum()))
     print("total cost USD", round(g.rate_usd.sum(), 2))
     print("pre-flight rows kept (in_flight=False)", g.attrs["n_pre_flight_rows"])

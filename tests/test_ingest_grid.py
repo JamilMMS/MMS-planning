@@ -12,10 +12,10 @@ import pytest
 
 from optimizer.config import load_config, project_root
 from optimizer.ingest.grid import (
-    _assign_overlap_groups,
+    _assign_overlap_components,
     _find_carry_forward_week,
     _split_title,
-    find_overlaps,
+    find_slot_conflicts,
     hhmm_to_min,
     load_grid,
 )
@@ -91,7 +91,7 @@ def test_no_arabic_in_title_en_synthetic():
 
 def _tiny_grid_frame():
     """A minimal synthetic frame with the columns load_grid's internals expect, used to test
-    _assign_overlap_groups and _find_carry_forward_week in isolation."""
+    find_slot_conflicts / _assign_overlap_components and _find_carry_forward_week in isolation."""
     return pd.DataFrame({
         "channel": ["X", "X", "X", "Y", "Y"],
         "air_date": pd.to_datetime(["2026-10-01"] * 3 + ["2026-10-01"] * 2),
@@ -101,21 +101,32 @@ def _tiny_grid_frame():
     })
 
 
-def test_assign_overlap_groups_pure():
+def test_find_slot_conflicts_pure():
     df = _tiny_grid_frame()
-    groups = _assign_overlap_groups(df)
-    # a [0,60) and b [30,90) overlap -> same group; c [200,260) overlaps nothing -> -1
-    assert groups.loc[df.index[df.slot_id == "a"]].iloc[0] == groups.loc[df.index[df.slot_id == "b"]].iloc[0]
-    assert groups.loc[df.index[df.slot_id == "a"]].iloc[0] != -1
-    assert groups.loc[df.index[df.slot_id == "c"]].iloc[0] == -1
-    # d and e (different channel Y, non-overlapping) -> both -1
-    assert groups.loc[df.index[df.slot_id == "d"]].iloc[0] == -1
-    assert groups.loc[df.index[df.slot_id == "e"]].iloc[0] == -1
+    conflicts = find_slot_conflicts(df)
+    # a [0,60) and b [30,90) overlap -> one pair; c [200,260) overlaps nothing -> no pair
+    pairs = set(zip(conflicts["slot_a"], conflicts["slot_b"]))
+    assert pairs == {("a", "b")}
+    # d and e (different channel Y, non-overlapping) -> no pairs at all involving them
+    assert not any("d" in p or "e" in p for p in pairs)
+    assert not any("c" in p for p in pairs)
 
 
-def test_assign_overlap_groups_containment():
+def test_assign_overlap_components_pure():
+    df = _tiny_grid_frame()
+    conflicts = find_slot_conflicts(df)
+    comps = _assign_overlap_components(df, conflicts)
+    assert comps.loc[df.index[df.slot_id == "a"]].iloc[0] == comps.loc[df.index[df.slot_id == "b"]].iloc[0]
+    assert comps.loc[df.index[df.slot_id == "a"]].iloc[0] != -1
+    assert comps.loc[df.index[df.slot_id == "c"]].iloc[0] == -1
+    assert comps.loc[df.index[df.slot_id == "d"]].iloc[0] == -1
+    assert comps.loc[df.index[df.slot_id == "e"]].iloc[0] == -1
+
+
+def test_find_slot_conflicts_containment_is_pairwise_not_transitive():
     """A containing interval overlapping several nested rows -- not just adjacent-in-sort-
-    order -- must all land in one group (the MBC BOLLYWOOD 'compilation block' pattern)."""
+    order -- must produce one conflict PAIR per (umbrella, nested-row); the nested rows must
+    NOT conflict with each other (the MBC BOLLYWOOD 'compilation block' pattern, CHANGE 2)."""
     df = pd.DataFrame({
         "channel": ["X"] * 4,
         "air_date": pd.to_datetime(["2026-10-01"] * 4),
@@ -123,9 +134,15 @@ def test_assign_overlap_groups_containment():
         "end_min": [100, 20, 30, 40],  # row0 spans [0,100) and contains rows 1,2,3
         "slot_id": ["big", "n1", "n2", "n3"],
     })
-    groups = _assign_overlap_groups(df)
-    assert len(set(groups)) == 1  # all 4 rows in one group
-    assert -1 not in set(groups)
+    conflicts = find_slot_conflicts(df)
+    pairs = set(zip(conflicts["slot_a"], conflicts["slot_b"]))
+    assert pairs == {("big", "n1"), ("big", "n2"), ("big", "n3")}  # umbrella-vs-each only
+    assert (conflicts["kind"] == "contains").all()
+    # a single connected component groups all 4 for reporting, but that is NOT the
+    # exclusivity rule -- n1/n2/n3 do not conflict with each other, per `pairs` above.
+    comps = _assign_overlap_components(df, conflicts)
+    assert len(set(comps)) == 1
+    assert -1 not in set(comps)
 
 
 def test_find_carry_forward_week_pure():
@@ -195,16 +212,69 @@ def test_load_grid_rate_aed_integral(cfg):
     assert off_by.max() < 0.01
 
 
-def test_load_grid_overlap_groups_count(cfg):
+def test_load_grid_overlap_locations_count(cfg):
     _skip_if_no_grid()
     g = load_grid(GRID_PATH, cfg)
-    n_groups = int(g.loc[g["overlap_group"] >= 0, "overlap_group"].nunique())
-    assert n_groups == 8
-    ov = find_overlaps(g)
-    assert len(ov) > 0
-    # every slot_id appearing in an overlap pair actually has overlap_group != -1
-    involved = set(ov["slot_a"]).union(ov["slot_b"])
-    assert (g.set_index("slot_id").loc[list(involved), "overlap_group"] >= 0).all()
+    conflicts = g.attrs["slot_conflicts"]
+    n_locations = conflicts.groupby(["channel", "air_date"]).ngroups
+    assert n_locations == 8  # PRELIMINARY_FINDINGS "8 overlapping slots" -- distinct locations
+    assert len(conflicts) > 0
+    # every slot_id appearing in a conflict pair actually has has_conflict=True and a
+    # non-(-1) overlap_component
+    involved = set(conflicts["slot_a"]).union(conflicts["slot_b"])
+    gi = g.set_index("slot_id")
+    assert gi.loc[list(involved), "has_conflict"].all()
+    assert (gi.loc[list(involved), "overlap_component"] >= 0).all()
+
+
+def test_bollywood_compilation_pairwise_conflicts(cfg):
+    """CHANGE 2 regression: the BOLLYWOOD 'WEEKEND DRAMA COMPILATION' umbrella conflicts with
+    every episode row it contains, but no two contained episode rows conflict with each other
+    -- computed strictly pairwise, not as a transitive-closure group. The 6-hour Thursday
+    occurrence (Oct 8) has 5 contained episodes, the most informative case; the 5-hour
+    Saturday occurrence (Oct 10) has only 1 (PARINEETI)."""
+    _skip_if_no_grid()
+    g = load_grid(GRID_PATH, cfg)
+    conflicts = g.attrs["slot_conflicts"]
+
+    for air_date, expected_episode_count in [("2026-10-08", 5), ("2026-10-10", 1)]:
+        day_rows = g[(g["channel"] == "MBC BOLLYWOOD") & (g["air_date"] == air_date)]
+        # There can be more than one "WEEKEND DRAMA COMPILATION" row on the same day (e.g. a
+        # separate late-night block with no episodes overlapping it) -- the one under test is
+        # the one that actually has conflicts.
+        umbrella = day_rows[
+            day_rows["title_en"].str.contains("WEEKEND DRAMA COMPILATION", na=False) & day_rows["has_conflict"]
+        ]
+        assert len(umbrella) == 1, air_date
+        umbrella_id = umbrella["slot_id"].iloc[0]
+
+        day_conflicts = conflicts[(conflicts["channel"] == "MBC BOLLYWOOD") & (conflicts["air_date"] == air_date)]
+        pairs = set(zip(day_conflicts["slot_a"], day_conflicts["slot_b"]))
+
+        # the episodes CONTAINED in the umbrella are exactly the rows it conflicts with (the
+        # channel/day has other, non-overlapping BOLLYWOOD programming too -- day_rows is not
+        # restricted to the compilation block).
+        conflict_partner_ids = {sid for pair in pairs for sid in pair if umbrella_id in pair} - {umbrella_id}
+        episodes = day_rows[day_rows["slot_id"].isin(conflict_partner_ids)]
+        assert len(episodes) == expected_episode_count, air_date
+
+        # umbrella conflicts with every contained episode
+        for ep_id in episodes["slot_id"]:
+            pair = tuple(sorted([umbrella_id, ep_id]))
+            assert pair in pairs, f"{air_date}: umbrella does not conflict with episode {ep_id}"
+
+        # no two episodes conflict with each other
+        ep_ids = sorted(episodes["slot_id"])
+        for i in range(len(ep_ids)):
+            for j in range(i + 1, len(ep_ids)):
+                pair = tuple(sorted([ep_ids[i], ep_ids[j]]))
+                assert pair not in pairs, f"{air_date}: episodes {pair} must not conflict"
+
+        # exactly one pair per episode -- no extra pairs for this (channel, air_date)
+        assert len(day_conflicts) == expected_episode_count, air_date
+
+    # total conflict pairs: 4 Thursdays x 5 + 3 Saturdays x 1 (BOLLYWOOD) + 1 (MBC 2) = 24
+    assert len(conflicts) == 24
 
 
 def test_load_grid_carry_forward_matches_week3(cfg):

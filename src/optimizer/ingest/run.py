@@ -3,10 +3,11 @@
     python -m optimizer.ingest.run --config config/plan_config.yaml
 
 Loads the October grid and every eTAM break file matching ``cfg.etam.break_files_glob``,
-writes ``data/processed/grid.parquet``, ``data/processed/breaks.parquet`` and
-``data/processed/ingest_manifest.json``, and produces the validation reports under
-``outputs/validation/``. Deterministic: re-running with unchanged inputs produces byte-
-identical parquet content (row order is sorted by a stable key before writing).
+writes ``data/processed/grid.parquet``, ``data/processed/breaks.parquet``,
+``data/processed/slot_conflicts.parquet`` and ``data/processed/ingest_manifest.json``, and
+produces the validation reports under ``outputs/validation/``. Deterministic: re-running with
+unchanged inputs produces byte-identical parquet content (row order is sorted by a stable key
+before writing).
 
 Never modifies ``data/raw/``.
 """
@@ -23,7 +24,7 @@ import pandas as pd
 
 from optimizer.config import load_config, project_root
 from optimizer.ingest.breaks import infer_universe, load_breaks, trp_invariant_ratio
-from optimizer.ingest.grid import find_overlaps, load_grid
+from optimizer.ingest.grid import find_slot_conflicts, load_grid
 from optimizer.ingest.incoming import process_incoming
 
 
@@ -109,8 +110,9 @@ def _grid_report(g: pd.DataFrame, cfg: dict) -> str:
     row("Special rows (MBC 1 only)", 18, int((orig["tags"] == "Special").sum()))
     row("MBC 1 week 20261025 rows in RAW file", 0, int((orig[(orig["channel"] == "MBC 1") & (orig["week"] == 20261025)]).shape[0]))
     row("Oct 1-3 (week 20260927) rows", 2, int((orig["week"] == 20260927).sum()))
-    n_overlap_groups = int(g.loc[g["overlap_group"] >= 0, "overlap_group"].nunique())
-    row("Distinct overlap groups (locations)", 8, n_overlap_groups)
+    slot_conflicts = g.attrs["slot_conflicts"]
+    n_locations = slot_conflicts.groupby(["channel", "air_date"]).ngroups
+    row("Distinct overlap locations (channel, air_date) -- PRELIMINARY_FINDINGS' '8 overlapping slots'", 8, n_locations)
 
     rate_table = (
         orig.groupby(["channel", "tier"])["rate_aed"].agg(lambda s: sorted(s.unique()))
@@ -140,11 +142,21 @@ def _grid_report(g: pd.DataFrame, cfg: dict) -> str:
         "misses non-adjacent overlaps. The grid contains MBC BOLLYWOOD 'WEEKEND DRAMA "
         "COMPILATION' container rows whose ~6-hour window fully contains up to 5 separately-"
         "listed component-episode rows; the reference script flags only 1 of those 5 nested "
-        "rows per occurrence. A rigorous pairwise interval-overlap + union-find pass finds the "
-        f"same **8 distinct overlapping (channel, air_date) locations** as PRELIMINARY_FINDINGS "
-        f"(so the headline number is confirmed), but clusters {int((g['overlap_group']>=0).sum())} "
-        "rows into those 8 groups rather than the reference script's 16 (8 pairs x 2 rows). "
-        "Every row sharing a window with another row now carries a non-(-1) `overlap_group`."
+        "rows per occurrence. A rigorous pairwise interval-overlap pass finds the same "
+        f"**8 distinct overlapping (channel, air_date) locations** as PRELIMINARY_FINDINGS "
+        "(so the headline number is confirmed)."
+    )
+    lines.append(
+        "- **Overlaps are now PAIRS, not groups (Gate 1 CHANGE 2)**: an earlier version of "
+        "this ingest clustered overlapping rows into transitive-closure groups (union-find), "
+        "which is wrong for buying decisions -- inside a BOLLYWOOD compilation block, the "
+        "umbrella row conflicts with every episode it contains, but the episodes do NOT "
+        f"conflict with each other (they are back-to-back, not overlapping). "
+        f"`data/processed/slot_conflicts.parquet` now has one row per conflicting **pair** "
+        f"({int(len(g.attrs['slot_conflicts']))} pairs total, computed strictly pairwise -- no "
+        "transitive closure), with `kind`='contains' or 'partial'. `grid.parquet` keeps "
+        "`overlap_component` (a cheap union-find grouping, for reporting/visualisation only -- "
+        "explicitly NOT the exclusivity rule) and a `has_conflict` bool."
     )
     lines.append(
         "- **MBC 1 week-4 carry-forward is now derived, not hard-coded**: the missing week "
@@ -175,11 +187,31 @@ def _grid_report(g: pd.DataFrame, cfg: dict) -> str:
     lines.append(f"- Rows with in_flight=False kept in output: {g.attrs.get('n_pre_flight_rows')}")
 
     lines.append("")
-    lines.append("## Overlaps (8 groups, all slot_ids)")
-    ov = find_overlaps(g)
-    for gid, grp in ov.groupby("overlap_group"):
-        ids = sorted(set(grp["slot_a"]).union(grp["slot_b"]))
-        lines.append(f"- Group {gid}: {ids}")
+    lines.append(f"## Slot conflicts ({len(slot_conflicts)} pairs across {n_locations} locations)")
+    lines.append(
+        "One row per conflicting **pair** of grid rows on the same channel/air_date -- computed "
+        "strictly pairwise, no transitive closure (an umbrella row conflicts with each episode "
+        "it contains; two contained episodes do not conflict with each other). Full table: "
+        "`data/processed/slot_conflicts.parquet`."
+    )
+    lines.append("")
+    lines.append("### BOLLYWOOD 'WEEKEND DRAMA COMPILATION' umbrella example (Thu 2026-10-08)")
+    lines.append(
+        "Note on naming: the umbrella title is literally `WEEKEND DRAMA COMPILATION:...` but the "
+        "grid airs it on both **Thursdays** (6h umbrella, 5 contained episodes -- the interesting "
+        "multi-episode case below) and **Saturdays** (5h umbrella, 1 contained episode, "
+        "PARINEETI -- trivially satisfies 'no two episodes conflict' since there is only one). "
+        "Both are exercised in `tests/test_ingest_grid.py::test_bollywood_compilation_pairwise_conflicts`."
+    )
+    bolly_thu = slot_conflicts[
+        (slot_conflicts["channel"] == "MBC BOLLYWOOD") & (slot_conflicts["air_date"] == pd.Timestamp("2026-10-08"))
+    ]
+    lines.append(bolly_thu.to_string(index=False) if len(bolly_thu) else "(none found)")
+    lines.append("")
+    lines.append("### All conflict pairs, grouped by (channel, air_date)")
+    for (channel, air_date), grp in slot_conflicts.groupby(["channel", "air_date"]):
+        pairs = [f"({r.slot_a} <-> {r.slot_b}, {r.kind}, {r.overlap_minutes}min)" for r in grp.itertuples()]
+        lines.append(f"- {channel} {air_date.date()}: {len(grp)} pair(s): {pairs}")
 
     return "\n".join(lines) + "\n"
 
@@ -246,6 +278,10 @@ def _breaks_report(b: pd.DataFrame, dedupe_stats: dict, cfg: dict) -> str:
 
     n_event = int(b["is_event"].sum())
     row("19 Sep event rows flagged is_event (>0 expected)", n_event > 0, n_event > 0)
+    row("MBC 1 is_event rows (event_policy=match_only -> match breaks only)",
+        8, int(((b["channel"] == "MBC 1") & b["is_event"]).sum()))
+    row("MBC ACTION is_event rows (event_policy=window -> whole event window)",
+        15, int(((b["channel"] == "MBC ACTION") & b["is_event"]).sum()))
 
     lines.append("")
     lines.append("## Type anomalies")
@@ -266,12 +302,56 @@ def _breaks_report(b: pd.DataFrame, dedupe_stats: dict, cfg: dict) -> str:
         "Detection: a (program, episode, broadcast_date) group airing on >=2 distinct channels "
         "with break start times within "
         f"{cfg['etam'].get('event_simulcast_tolerance_min', 10)} minutes of each other -> "
-        "simulcast special. Candidate generation also scanned program/episode text for "
-        f"{cfg['etam'].get('event_keywords')} and flagged channel-days whose mean rating_abs "
-        f"exceeds {cfg['etam'].get('event_anomaly_ratio', 3.0)}x that channel's own median "
-        "channel-day mean (informational, does not by itself set is_event)."
+        "simulcast special (the anchor = the match breaks themselves). Candidate generation "
+        f"also scanned program/episode text for {cfg['etam'].get('event_keywords')} and "
+        f"flagged channel-days whose mean rating_abs exceeds "
+        f"{cfg['etam'].get('event_anomaly_ratio', 3.0)}x that channel's own median channel-day "
+        "mean (informational, does not by itself set is_event)."
     )
-    ev = b[b["is_event"]][["program", "episode", "channel", "broadcast_date", "rating_pct"]].drop_duplicates()
+    lines.append("")
+    lines.append(
+        "**Per-channel exclusion policy** (`etam.event_policy`, Gate-1 CHANGE 1): what gets "
+        "excluded around the anchor differs by channel --"
+    )
+    for ch, policy in (cfg["etam"].get("event_policy", {}) or {}).items():
+        lines.append(f"- `{ch}`: **{policy}**")
+    lines.append(
+        "- `MBC 1` (event_reason=`SIMULCAST_MATCH`): only the 8 FIFA/NADEENA match breaks "
+        "themselves are excluded; MBC 1's other breaks that day are kept in baselines."
+    )
+    lines.append(
+        "- `MBC ACTION` (event_reason=`SIMULCAST_WINDOW`): the whole anomalous-audience window "
+        "is excluded, not just the match breaks -- see below for the window chosen and why."
+    )
+
+    lines.append("")
+    lines.append("### Event window(s) chosen (event_policy=window channels)")
+    event_windows = b.attrs.get("event_windows") or []
+    if not event_windows:
+        lines.append("(none -- no channel in cfg.etam.event_policy resolved to 'window' for any detected incident)")
+    for w in event_windows:
+        def _fmt(sec: int) -> str:
+            h, rem = divmod(int(sec), 3600)
+            m, s = divmod(rem, 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        lines.append(
+            f"- **{w['channel']} {w['broadcast_date']}**: window "
+            f"[{_fmt(w['window_start_sec'])} - {_fmt(w['window_end_sec'])}] "
+            f"({w['n_breaks']} breaks). Programmes covered: {', '.join(w['programmes'])}. "
+            f"Detection: rating_abs > {w['event_window_ratio']}x the channel's own same-hour "
+            f"baseline (median rating_abs in that broadcast-day hour, over all non-event dates "
+            f"for that channel), grown outward from the simulcast anchor while consecutive "
+            f"breaks stay within {w['max_gap_sec'] // 60} minutes of each other (normal "
+            "within-programme break gaps here run ~150-900s; the growth for MBC ACTION 19-Sep "
+            "stops exactly at the ~52min gap before the 20:17 BUNDESLIGA highlights break, which "
+            "is the real programme/audience-level boundary). `RIDICULOUSNESS` and the two "
+            "`BUNDESLIGA ...` programmes are included here purely because they are statistically "
+            "elevated and time-contiguous with the match -- they are not themselves FIFA/NADEENA "
+            "programming, so this is flagged for human review at Gate 1 as a judgement call, not "
+            "a hard fact from the data."
+        )
+
+    ev = b[b["is_event"]][["program", "episode", "channel", "broadcast_date", "rating_pct", "event_reason"]].drop_duplicates()
     lines.append("")
     lines.append("Flagged rows (is_event=True):")
     lines.append(ev.to_string(index=False))
@@ -291,9 +371,12 @@ def _breaks_report(b: pd.DataFrame, dedupe_stats: dict, cfg: dict) -> str:
         "low range (<=0.09%), single-channel only -- not a simulcast, not anomalous."
     )
     lines.append(
-        "- `THE FOOTBALL REVIEW`, `BUNDESLIGA ...`, `HIGHLIGHTS - ...`, `LIVE BY NIGHT`, "
-        "`MATCHSTICK MEN` (word-boundary false positive on \"MATCH\"): regular recurring "
-        "programming, single-channel, normal rating range."
+        "- `THE FOOTBALL REVIEW`, `HIGHLIGHTS - ...`, `LIVE BY NIGHT`, `MATCHSTICK MEN` "
+        "(word-boundary false positive on \"MATCH\"): regular recurring programming, "
+        "single-channel, normal rating range. `BUNDESLIGA ...` on any date OTHER than 19-Sep is "
+        "also normal range and not flagged; on 19-Sep itself its ratings are statistically "
+        "elevated (spillover from the FIFA Cup broadcast) and it falls inside the MBC ACTION "
+        "event window above, so those specific rows ARE flagged (event_reason=SIMULCAST_WINDOW)."
     )
     lines.append(
         "- `FILMS AND STARS`/`STAR FILES` (15 Sep) and `SCOOP NETWORK`/`PREMIER` (2 Sep) air "
@@ -348,9 +431,11 @@ def _summary_report(grid_lines: str, breaks_lines: str) -> str:
         "## NEW issues not in PRELIMINARY_FINDINGS (summary)",
         "1. Grid `Program_name` Arabic/English split: reference parser leaves Arabic text in "
         "`title_en` for 44 rows (7 programs) that use a non-standard `/` separator. Fixed.",
-        "2. Grid overlap detection: reference parser's adjacent-only sweep misses nested "
-        "overlaps inside MBC BOLLYWOOD 'WEEKEND DRAMA COMPILATION' blocks. Same 8 overlap "
-        "locations confirmed; more rows now correctly carry an overlap_group.",
+        "2. Grid overlaps: reference parser's adjacent-only sweep misses nested overlaps inside "
+        "MBC BOLLYWOOD 'WEEKEND DRAMA COMPILATION' blocks. Same 8 overlap locations confirmed. "
+        "Overlaps are now emitted strictly pairwise (data/processed/slot_conflicts.parquet), "
+        "not as transitive-closure groups -- an umbrella conflicts with each episode it "
+        "contains, but two contained episodes never conflict with each other.",
         "3. eTAM `program`/`episode` columns contain non-string (numeric) cells for at least "
         "one MBC MAX/MBC 2 programme; cast to str before any string operation.",
         "4. The 19 Sep FIFA/NADEENA football special aired on **both MBC 1 and MBC ACTION** "
@@ -393,6 +478,10 @@ def main(argv: list[str] | None = None) -> None:
     (validation_dir / "etam_breaks_report.md").write_text(breaks_report, encoding="utf-8")
     (validation_dir / "validation_summary.md").write_text(_summary_report(grid_report, breaks_report), encoding="utf-8")
 
+    slot_conflicts_out = (
+        g_out.attrs["slot_conflicts"].sort_values(["channel", "air_date", "slot_a", "slot_b"]).reset_index(drop=True)
+    )
+
     # .attrs (carry_forward_weeks, anomalous_channel_days DataFrame, etc.) are report-only
     # side channels, not serializable to parquet metadata -- reports above have already
     # consumed them, so drop before writing parquet.
@@ -401,6 +490,7 @@ def main(argv: list[str] | None = None) -> None:
 
     g_out.to_parquet(processed_dir / "grid.parquet", index=False)
     b_out.to_parquet(processed_dir / "breaks.parquet", index=False)
+    slot_conflicts_out.to_parquet(processed_dir / "slot_conflicts.parquet", index=False)
 
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -421,11 +511,16 @@ def main(argv: list[str] | None = None) -> None:
             "date_min": str(b_out["broadcast_date"].min().date()),
             "date_max": str(b_out["broadcast_date"].max().date()),
         },
+        "slot_conflicts": {
+            "rows_total": len(slot_conflicts_out),
+            "distinct_locations": slot_conflicts_out.groupby(["channel", "air_date"]).ngroups,
+        },
     }
     (processed_dir / "ingest_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(f"grid: {len(g_out)} rows -> {processed_dir / 'grid.parquet'}")
     print(f"breaks: {len(b_out)} rows -> {processed_dir / 'breaks.parquet'}")
+    print(f"slot_conflicts: {len(slot_conflicts_out)} pairs -> {processed_dir / 'slot_conflicts.parquet'}")
     print(f"manifest -> {processed_dir / 'ingest_manifest.json'}")
     print(f"reports -> {validation_dir}")
 

@@ -148,13 +148,18 @@ def test_carry_forward_rows_flagged_and_counted(cfg):
     assert len(synthetic) == len(week3_mbc1)
 
 
-def test_overlap_groups_shared_and_count(cfg):
+def test_overlap_locations_and_conflict_pairs(cfg):
+    """CHANGE 2: overlaps are pairwise conflicts, not transitive-closure groups."""
     _skip_if_no_grid()
     g = load_grid(GRID_PATH, cfg)
-    n_groups = int(g.loc[g["overlap_group"] >= 0, "overlap_group"].nunique())
-    assert n_groups == 8
-    for gid, grp in g[g["overlap_group"] >= 0].groupby("overlap_group"):
-        assert len(grp) >= 2  # every group has at least 2 rows sharing it
+    conflicts = g.attrs["slot_conflicts"]
+    n_locations = conflicts.groupby(["channel", "air_date"]).ngroups
+    assert n_locations == 8
+    assert len(conflicts) == 24
+    assert set(conflicts["kind"].unique()) <= {"contains", "partial"}
+    # overlap_component is a reporting-only union-find grouping over the same pairs
+    for cid, grp in g[g["overlap_component"] >= 0].groupby("overlap_component"):
+        assert len(grp) >= 2  # every component has at least 2 rows sharing it
 
 
 def test_raw_data_sha256_unchanged_after_ingest():
