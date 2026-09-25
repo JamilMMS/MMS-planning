@@ -9,10 +9,10 @@ Last updated: 2026-09-25 (session 1)
 | 1 Ingestion & validation -> grid.parquet, breaks.parquet, outputs/validation/*_report.md, invariant tests | data-validator (sonnet) | DONE (50/50 PRELIMINARY checks PASS) |
 | 2 Nielsen metrics -> src/optimizer/metrics/, one test per fixture row, extra fixtures from PDFs | nielsen-definitions (opus) | DONE (F01–F60, 69 tests) |
 | GATE 1 | human | PASSED 2026-09-25 with changes (event rule per channel, overlap pairs, sort review by $) |
-| 3 Program matching -> program_map.csv + review sheet; independent verification | program-matcher (opus) then match-verifier (sonnet) | IN PROGRESS |
-| GATE 2 | human | pending |
-| 4 Forecast + back-test -> slot_forecast.parquet, backtest_report.md | audience-forecaster (opus) | waiting |
-| 5 Reach engine (ESTIMATE now; EXACT/CALIBRATED behind same interface) | reach-modeler (opus), started in parallel with Phase 3 | IN PROGRESS |
+| 3 Program matching -> program_map.csv + review sheet; independent verification | program-matcher (opus) then match-verifier (sonnet) | DONE (157 titles; 62 conf>=0.85; 95 in review; verifier 113 AGREE / 2 DISAGREE / 42 UNSURE) |
+| GATE 2 | human | WAITING for corrections (outputs/validation/program_matches_review.xlsx) |
+| 4 Forecast + back-test -> slot_forecast.parquet, backtest_report.md | audience-forecaster (opus) | IN PROGRESS (back-test + provisional Oct forecast; re-run after Gate 2) |
+| 5 Reach engine (ESTIMATE now; EXACT/CALIBRATED behind same interface) | reach-modeler (opus) | DONE (ESTIMATE fitted; EXACT/CALIBRATED ready; 35 tests) |
 | GATE 3 | human | pending |
 | 6 Optimization S1–S4 + frontier + constraint verification | optimizer (opus) | waiting |
 | 7 Independent audit (audit/, never reads src/optimizer) | auditor (sonnet) | waiting |

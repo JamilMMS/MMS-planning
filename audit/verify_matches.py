@@ -53,7 +53,8 @@ GENERIC_MOVIE_PATTERNS = [
 # Keyed by normalised grid_title -> set of normalised etam_titles accepted as
 # the same programme on semantic grounds (English label vs Arabic transliteration).
 SEMANTIC_PAIRS = {
-    "MBC NEWS LIVE": {"AL AKHBAR MBC 1", "AL AKHBAR"},
+    # keys are post-normalize_title() forms (LIVE/season/etc already stripped)
+    "MBC NEWS": {"AL AKHBAR MBC 1", "AL AKHBAR"},
     "THE MORNING SHOW": {"SABAH AL KHAIR YA ARAB"},
     "MBC IN A WEEK": {"MBC FI OSBO"},
     "THREE KINGDOMS": {"AL MAMALEK AL THALATH"},
@@ -103,6 +104,19 @@ def consonant_skeleton(s: str) -> str:
     return "".join(ch for ch in s.replace(" ", "") if ch not in VOWELS)
 
 
+# Populated once in main() from the actual title corpus: tokens that recur
+# across many distinct programme names (HIGHLIGHTS, SHOW, CHAMPIONSHIP, ...)
+# are low-signal and must not by themselves drive a title match.
+STOPWORDS: set[str] = set()
+
+
+def _strip_stopwords(norm: str) -> str:
+    if not STOPWORDS:
+        return norm
+    kept = [w for w in norm.split() if w not in STOPWORDS]
+    return " ".join(kept) if kept else norm
+
+
 def title_score(grid_title_raw: str, etam_title_raw: str) -> tuple[int, bool]:
     """Returns (score 0-100, semantic_flag)."""
     g_norm = normalize_title(grid_title_raw)
@@ -115,10 +129,29 @@ def title_score(grid_title_raw: str, etam_title_raw: str) -> tuple[int, bool]:
         x.replace(" ", "") for x in SEMANTIC_PAIRS[g_key]
     }:
         return 100, True
-    s1 = fuzz.token_sort_ratio(g_norm, e_norm)
-    s2 = fuzz.WRatio(g_norm, e_norm)
-    s3 = fuzz.ratio(consonant_skeleton(g_norm), consonant_skeleton(e_norm))
-    return round(max(s1, s2, s3)), False
+    # Drop channel-generic tokens (e.g. "HIGHLIGHTS") before scoring, so two
+    # titles that only share a common word don't score as a match.
+    g_ds = _strip_stopwords(g_norm)
+    e_ds = _strip_stopwords(e_norm)
+    # token_sort_ratio is the anchor score. WRatio's partial-ratio component
+    # can wrongly inflate scores for very different-length titles that merely
+    # share one generic word, so it and the consonant-skeleton rescue are
+    # only trusted as boosts once the anchor score already shows the titles
+    # are plausibly related.
+    base = fuzz.token_sort_ratio(g_ds, e_ds)
+    g_words, e_words = set(g_ds.split()), set(e_ds.split())
+    # Full containment (one title's remaining words are entirely inside the
+    # other's, e.g. "NADEENA" inside "NADEENA KHALEEJI 27") is trustworthy
+    # evidence of the same programme even when the anchor score is low, unlike
+    # a single shared generic word -- so it gets its own gate.
+    is_subset = bool(g_words) and bool(e_words) and (g_words <= e_words or e_words <= g_words)
+    if base >= 55 or is_subset:
+        s2 = fuzz.WRatio(g_ds, e_ds)
+        base = max(base, s2)
+        if abs(len(g_ds.split()) - len(e_ds.split())) <= 1:
+            s3 = fuzz.ratio(consonant_skeleton(g_ds), consonant_skeleton(e_ds))
+            base = max(base, s3)
+    return round(base), False
 
 
 def load_data():
@@ -219,8 +252,25 @@ def dominant_program_share(breaks_sub_all_channel: pd.DataFrame, windows: pd.Dat
     return top.index[0], round(100.0 * top.iloc[0] / n, 1), n
 
 
+def build_stopwords(grid: pd.DataFrame, breaks: pd.DataFrame, min_df: int = 5) -> set[str]:
+    """Tokens that appear in >= min_df distinct programme names across the
+    whole grid + eTAM corpus are too generic to be a matching signal on their
+    own (HIGHLIGHTS, SHOW, CHAMPIONSHIP, COMPILATION, ...)."""
+    from collections import Counter
+
+    titles = set(grid["title_en"].dropna().unique()) | set(breaks["program"].dropna().unique())
+    df = Counter()
+    for t in titles:
+        words = set(normalize_title(t).split())
+        for w in words:
+            df[w] += 1
+    return {w for w, c in df.items() if c >= min_df and len(w) > 2}
+
+
 def main():
+    global STOPWORDS
     pairs, grid, breaks = load_data()
+    STOPWORDS = build_stopwords(grid, breaks)
     results = []
 
     # index breaks by channel for speed
@@ -279,6 +329,26 @@ def main():
                 continue
 
             # non-generic NONE
+            if best_prog is not None and best_score >= 95:
+                # Essentially exact title match in the eTAM corpus: trust the
+                # name even if the time-slot overlap is weak (event-style
+                # programmes can move date/time year to year).
+                verdict = "DISAGREE"
+                reason = (
+                    f"eTAM title {best_prog!r} (score {best_score}) is essentially the same "
+                    f"name as this grid title and has {cands[best_prog]} September breaks; "
+                    f"time overlap is {best_overlap}%"
+                    + (" (weak -- may have moved slot)" if best_overlap < 30 else "")
+                    + " -> looks like the same programme, should not be NONE."
+                )
+                results.append(dict(
+                    channel=channel, grid_title=grid_title, etam_title=etam_title,
+                    verdict=verdict, verifier_title_score=best_score,
+                    verifier_time_overlap_pct=best_overlap,
+                    verifier_proposed_etam_title=best_prog, verifier_reason=reason,
+                ))
+                continue
+
             if best_prog is not None and (best_score >= 80 or best_sem) and best_overlap >= 30:
                 verdict = "DISAGREE"
                 reason = (
@@ -369,6 +439,23 @@ def main():
                 f"eTAM title {etam_title!r} has 0 September breaks on {e_ch}; cannot "
                 f"verify by time slot. Title score {score}."
             ) + cross_note
+        elif score >= 95 or sem:
+            # Near-exact/exact title identity: trust the name match. Time-slot
+            # overlap is reported as a sanity check, not a gate -- a weekly
+            # drama can shift day/time between September and October while
+            # remaining unambiguously the same title.
+            verdict = "AGREE"
+            caveat = (
+                f" NOTE: time-slot overlap is only {ov}% (weekday overlap "
+                f"{round(wd_jac*100)}%) -- schedule may have moved day/time between "
+                f"September and October; title identity is exact so still AGREE."
+                if ov < 30 else ""
+            )
+            reason = (
+                f"Title score {score}{' (semantic)' if sem else ''} -- exact/near-exact "
+                f"name match; {ov}% of {n_breaks} Sept breaks fall inside the October "
+                f"grid window(s)."
+            ) + caveat + cross_note
         elif (score >= 85 or sem) and ov >= 50:
             verdict = "AGREE"
             reason = (
@@ -422,10 +509,12 @@ def main():
         ))
 
     matched_etam_per_channel = {}
+    resolved_grid_titles_per_channel = {}  # grid_title already paired with a real (non-NONE) etam_title
     for _, row in pairs.iterrows():
         if row["etam_title"] != "NONE" and pd.notna(row["etam_title"]):
             ech = row["etam_channel"] if pd.notna(row["etam_channel"]) else row["channel"]
             matched_etam_per_channel.setdefault(ech, set()).add(row["etam_title"])
+            resolved_grid_titles_per_channel.setdefault(row["channel"], set()).add(row["grid_title"])
 
     reverse_rows = []
     for channel in sorted(breaks["channel"].unique()):
@@ -433,6 +522,13 @@ def main():
         matched = matched_etam_per_channel.get(channel, set())
         grid_titles = list(grid[grid["channel"] == channel]["title_en"].unique())
         windows_map = {gt: get_grid_windows(grid, channel, gt) for gt in grid_titles}
+        resolved_titles = resolved_grid_titles_per_channel.get(channel, set())
+        # Occupancy (pure time-window) candidates are restricted to grid slots
+        # the matcher left open (NONE) or generic strands -- a slot already
+        # confidently paired with a different named eTAM title should not be
+        # re-proposed just because a wide, multi-tier window coincidentally
+        # overlaps another September show.
+        occ_candidate_titles = [gt for gt in grid_titles if gt not in resolved_titles]
         title_score_map = {}  # cache: prog -> list of (gt, score, sem)
         for prog, n in cands.items():
             if prog in matched:
@@ -443,7 +539,7 @@ def main():
             best_grid, best_score, best_sem = None, 0, False
             best_ov_for_title = 0.0
             occ_grid, occ_ov = None, 0.0
-            for gt in grid_titles:
+            for gt in occ_candidate_titles:
                 sc, semm = title_score(gt, prog)
                 w = windows_map[gt]
                 ov = overlap_pct(prog_breaks, w)
@@ -453,6 +549,7 @@ def main():
                     best_grid, best_score, best_sem = gt, sc, semm
                     best_ov_for_title = ov
             best_ov = best_ov_for_title
+            occ_is_generic = occ_grid is not None and is_generic_movie_title(occ_grid)
             if best_score >= 80 or best_sem:
                 verdict = "DISAGREE"
                 reason = (
@@ -461,7 +558,7 @@ def main():
                     f"{best_ov}% time overlap) -> should probably have been matched."
                 )
                 proposal = best_grid
-            elif occ_grid is not None and occ_ov >= 60:
+            elif occ_grid is not None and occ_ov >= 60 and not occ_is_generic and n >= 8:
                 verdict = "DISAGREE"
                 reason = (
                     f"eTAM title {prog!r} ({n} Sept breaks on {channel}) is unmatched but its "
@@ -469,13 +566,32 @@ def main():
                     f"{occ_grid!r}'s October window {occ_ov}% of the time -> possible same slot."
                 )
                 proposal = occ_grid
+            elif occ_is_generic and occ_ov >= 40:
+                verdict = "AGREE"
+                reason = (
+                    f"eTAM title {prog!r} ({n} Sept breaks on {channel}) is unmatched, but its "
+                    f"slot is a generic movie/compilation strand in the October grid "
+                    f"({occ_grid!r}, {occ_ov}% time overlap) -- already correctly left as a "
+                    f"rotating title with no single-programme match, consistent with the "
+                    f"NONE verdicts on that strand elsewhere in this file."
+                )
+                proposal = ""
+            elif best_score < 45 and occ_ov < 30:
+                verdict = "AGREE"
+                reason = (
+                    f"eTAM title {prog!r} ({n} Sept breaks on {channel}) is unmatched; no grid "
+                    f"title resembles it by name (best {best_grid!r} scores {best_score}) and "
+                    f"no October slot is occupied by its September pattern ({occ_ov}%) -- "
+                    f"plausibly a September-only programme with no October equivalent."
+                )
+                proposal = ""
             else:
                 verdict = "UNSURE"
                 reason = (
                     f"eTAM title {prog!r} ({n} Sept breaks on {channel}) is unmatched; "
                     f"best title candidate {best_grid!r} (score {best_score}), best "
                     f"time-window occupant {occ_grid!r} ({occ_ov}%) -- neither is a clean match, "
-                    f"plausibly a September-only programme absent from the October grid."
+                    f"worth a human look."
                 )
                 proposal = ""
             reverse_rows.append(dict(

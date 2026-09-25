@@ -50,6 +50,56 @@ forecast:
   seasonality_trend: false
   quantiles: [0.10, 0.50, 0.90]
   random_seed: 42
+  # --- added Phase 4 (audience-forecaster); see src/optimizer/forecast/METHOD.md -----------------
+  shrinkage_k: 6                 # empirical-Bayes pseudo-count k: est = (n*x_level + k*x_parent)/(n + k)
+                                  # (n = evidence breaks at the level, x_parent = the next level's estimate)
+  min_match_confidence: 0.0      # program_map matches below this confidence skip the program level
+                                  # (0.0 = trust program_map as reviewed at Gate 2)
+  day_types:                     # level-3 "day-type" (channel x daypart x day-type)
+    weekday: [Sun, Mon, Tue, Wed, Thu]
+    weekend: [Fri, Sat]
+  dayparts:                      # broadcast-day minutes [start, end) for the channel x daypart level
+    early: [180, 360]            # 03:00-05:59
+    morning: [360, 720]          # 06:00-11:59
+    daytime: [720, 1080]         # 12:00-17:59
+    prime: [1080, 1440]          # 18:00-23:59
+    late: [1440, 1680]           # 24:00-27:59 (grid slots may wrap to 27:14)
+  low_sample_policy: channel_daypart   # low_sample_channel channels (ACTION, MAX): channel_daypart = pooled
+                                        # over all days | channel_daypart_daytype = split by day_types
+  live_special_patterns: ['KHALEEJI', '\bCUP\b', '\bMATCH\b', 'FIFA', 'FOOTBALL']  # is_live grid rows
+                                  # whose title matches -> live sport/special -> live_policy (slot baseline
+                                  # excl. events, high_uncertainty). Other is_live rows (news, morning show)
+                                  # are recurring studio shows and use the normal hierarchy.
+  bootstrap_n: 1000              # draws for p10/p90 (day-cluster bootstrap + slot-day predictive noise)
+  interval_widening:             # p10' = p50 - w*(p50-p10), p90' = p50 + w*(p90-p50); several flags -> max w
+    new_program: 1.5
+    live_special: 2.0
+    low_sample: 1.5
+  high_uncertainty_rel_width: 2.0  # (p90 - p10) / p50 above this also sets high_uncertainty
+  predictive_min_window_min: 30  # slot-day noise: evidence grouped by (date, start // max(window, this))
+  paths:
+    breaks: data/processed/breaks.parquet
+    grid: data/processed/grid.parquet
+    program_map: data/processed/program_map.csv
+    out_parquet: data/processed/slot_forecast.parquet
+    out_evidence: data/processed/slot_forecast_evidence.parquet
+    out_app_json: outputs/slot_forecast_for_app.json
+    backtest_report: outputs/validation/backtest_report.md
+    backtest_slots: outputs/validation/backtest_slots.csv
+  backtest:
+    fit: ['2026-09-01', '2026-09-14']       # when August lands: fit Aug 1-31, holdout Sep 1-30
+    holdout: ['2026-09-15', '2026-09-21']
+    window_round_min: 15         # hold-out slot window = its break span floored/ceiled to this grid
+    regular_sample_share: 0.25   # mock plan: all Access/Prime/Special hold-out slots + this share of Regular
+    selection_budget_share: 0.30 # selection plan: cheapest predicted-CPM slots up to this share of cost
+    target_abs_error: 0.10       # Gate 3 target on plan-level impressions error
+    alternatives:                # settings compared (full factorial); best by |plan error|, tie WMAPE
+      weekday_groups:
+        config: [[Sun, Mon, Tue, Wed], [Thu], [Fri], [Sat]]
+        each_day: [[Sun], [Mon], [Tue], [Wed], [Thu], [Fri], [Sat]]
+        weekday_weekend: [[Sun, Mon, Tue, Wed, Thu], [Fri, Sat]]
+      estimator: [trimmed_mean_10, median]
+      time_tolerance_min: [30, 60]
 
 reach:
   mode: ESTIMATE                 # EXACT | CALIBRATED | ESTIMATE
