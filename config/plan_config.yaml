@@ -28,8 +28,18 @@ etam:
   exclude_event_days: true
   low_sample_zero_share: 0.50    # channel flagged if >50% of breaks rate zero
   event_keywords: [FIFA, NADEENA, CUP, LIVE, MATCH, KHALEEJI, FOOTBALL]  # candidate scan only
-  event_simulcast_tolerance_min: 10  # same program+episode+date on >=2 channels within this many minutes -> one-off simulcast event
+  event_simulcast_tolerance_min: 10  # same program+episode+date on >=2 channels within this many minutes -> one-off simulcast event (the "anchor")
   event_anomaly_ratio: 3.0       # channel-day mean rating_abs > this x that channel's median channel-day mean -> flagged for review
+  event_window_ratio: 3.0        # event_policy=window only: a break's rating_abs > this x its channel's own same-hour
+                                  # baseline (median over non-event dates) keeps growing the excluded window outward
+                                  # from the simulcast anchor (see optimizer.ingest.breaks._grow_event_window)
+  event_policy:                  # per-channel policy for what gets excluded around a detected simulcast event (Gate 1
+                                  # CHANGE 1): "window" excludes the WHOLE anomalous-audience window around the anchor
+                                  # (pre/post-match spillover on other programmes included); "match_only" excludes just
+                                  # the simulcast-detected match breaks themselves. Keyed by channel name, "default"
+                                  # applies to any channel not listed.
+    "MBC ACTION": window
+    default: match_only
 
 forecast:
   min_breaks: 6
@@ -45,6 +55,43 @@ reach:
   mode: ESTIMATE                 # EXACT | CALIBRATED | ESTIMATE
   common_weight_rule: average    # average | middle_day (confirm with Nielsen)
   estimate_sensitivity_k: 0.30   # report plan reach at k ±30%
+  min_seconds: null              # EXACT: eTAM Options reach threshold in seconds (DATA_SPEC C.4). MUST be set for EXACT.
+  max_frequency: 10              # K: Reach N+ reported for N = 1..K (top bucket = K or more)
+  params_path: data/processed/reach_params.json   # written by `python -m optimizer.reach.fit`
+  duplication: sainsbury         # sainsbury | matrix (matrix = CALIBRATED duplication matrix)
+  estimate:                      # ESTIMATE mode (break-level data only) — see src/optimizer/reach/ESTIMATE_METHOD.md
+    breaks_path: data/processed/breaks.parquet
+    model_form: auto             # auto | hyperbolic | negexp (auto = better fit on reach-vs-break-length; tie -> hyperbolic)
+    form_tie_tolerance: 0.01     # relative pooled-SSE difference below which the forms are a tie
+    cell_granularity: channel    # channel | channel_daypart (daypart cells are Sainsbury-combined: overstates reach)
+    dayparts:                    # broadcast-day minutes [start, end); used only for channel_daypart cells
+      early: [180, 360]          # 03:00-05:59
+      morning: [360, 720]        # 06:00-11:59
+      daytime: [720, 1080]       # 12:00-17:59
+      prime: [1080, 1440]        # 18:00-23:59
+      late: [1440, 1620]         # 24:00-26:59
+    min_rating_abs_for_ratio: 5000      # breaks with audience below this (~4 panelists) are too coarse for reach/rating ratios
+    min_breaks_for_channel_fit: 100     # below this, the turnover rate is pooled across channels
+    sessions_per_daily_viewer: 1.5      # ASSUMPTION: viewing sessions per daily viewer of a channel (daily cume = sessions / m)
+    sessions_per_daily_viewer_daypart: 1.0  # ASSUMPTION (channel_daypart cells only)
+    day_to_day_rho: 0.45                # ASSUMPTION: intra-person correlation of daily channel viewing (Beta day model)
+    initial_slope_cap: 1.0              # reach per GRP of the first spot capped at 1 so OTS >= 1 (see method doc)
+    rmax_cap_pct: 95.0                  # no channel reaches more than this % of the universe over the flight
+    daily_reach_override: {}            # {"MBC 1": 1850000} observed eTAM Average Daily Reach (abs) replaces the estimate
+    report_sessions_grid: [1.0, 1.5, 2.0]
+    report_rho_grid: [0.30, 0.45, 0.60]
+  exact:                         # EXACT mode (respondent-level data, DATA_SPEC C.3 option A)
+    respondent_path: null        # CSV/parquet: panelist_id, date, daily_weight, channel, view_start, view_end
+    date_mapping: identity       # identity | cyclic_weekday (map flight dates onto same-weekday panel dates, week order kept)
+    universe_from_panel: false   # true: universe = mean over days of the sum of daily weights
+  calibration:                   # CALIBRATED mode (eTAM R&F outputs, DATA_SPEC C.3 option B)
+    schedules_path: null         # schedule_id, grp_pct, reach_1plus_pct .. reach_5plus_pct
+    spots_path: null             # schedule_id, channel, air_date, start_min, aud_abs
+    duplication_matrix_path: null  # channel_i, channel_j, dup_reach_abs, reach_i_abs, reach_j_abs
+    params_path: data/processed/reach_params_calibrated.json
+    train_share: 0.80
+    fit_reach_levels: [1]        # reach N+ levels in the loss (add 2..5 when available)
+    random_seed: 42
 
 objective:
   recommended: max_reach_1plus   # max_reach_1plus | max_reach_3plus | max_impressions | balanced
@@ -88,3 +135,48 @@ rounding:
 audit:
   tolerance_pct: 0.1
   reach_tolerance_points: 0.1
+
+match:                             # Phase 3 — grid programme -> eTAM title matching (src/optimizer/match)
+  review_threshold: 0.85           # confidence below this -> Gate 2 review sheet
+  fuzzy_accept: 90                 # title score >= this (all tokens aligned) = strong fuzzy
+  fuzzy_review: 80                 # title score in [fuzzy_review, fuzzy_accept) = proposal for review only
+  token_match: 80                  # per-token similarity (0-100) for two tokens to count as "the same word"
+  arabic_accept: 90                # Arabic-title transliteration skeleton score needed for a semantic proposal
+  arabic_min_skeleton_len: 3       # ignore Arabic skeletons shorter than this (too ambiguous)
+  time_tolerance_min: 30           # Sep break start within [slot start - tol, slot end + tol) counts as time overlap
+  min_time_overlap: 0.30           # share of Oct slots with a Sep airing nearby = "consistent time window"
+  semantic_min_time_overlap: 0.50  # semantic / alias proposals need at least this time overlap
+  cross_channel_penalty: 0.20      # subtracted from confidence when history comes from another channel
+  cross_channel_cap: 0.80          # cross-channel matches never exceed this (always reviewed)
+  semantic_confidence: 0.75        # base confidence of an Arabic-transliteration / alias (time-slot inferred) match
+  sibling_cap: 0.65                # franchise sibling / spin-off (differing title word) — proxy only
+  compilation_cap: 0.80            # compilation label mapped to its component (or component MARATHON)
+  qualifier_cap: 0.80              # title with a parenthetical qualifier, e.g. NADEENA (KHALEEJI 27)
+  ambiguity_penalty: 0.05          # runner-up of the same kind within ambiguity_gap points
+  ambiguity_gap: 3
+  rerun_mismatch_penalty: 0.02     # |Oct rerun share - Sep rerun share| > rerun_mismatch_gap
+  rerun_mismatch_gap: 0.50
+  min_etam_breaks: 6               # thin-history flag; also the floor for the unmatched_etam sheet
+  articles: [AL, EL, AR]           # standalone Arabic articles dropped by the normaliser
+  variant_suffixes: [MARATHON]     # eTAM "<title> MARATHON" = block/compilation airing of <title>
+  sibling_max_diff_words: 1        # a sibling proxy may differ by at most one word per side ...
+  generic_words: [THE, OF, AND, A, IN, ON, WITH, SHOW, HIGHLIGHTS, WORLD, CHAMPIONSHIP, CUP, SERIES, LEAGUE, MBC, MOVIE, MOVIES, DRAMA]  # ... and must share a word outside this list
+  etam_channel_suffix: '\s*-\s*MBC\s*\w*\s*$'   # e.g. "AL AKHBAR - MBC 1" -> "AL AKHBAR"
+  compilation_pattern: '^(?:(?:ARABIC|TURKISH|WEEKEND)\s+DRAMA\s*-?\s*COMPILATION)\s*:?\s*(.*)$'
+  tbc_patterns: ['^(TBC|TBA|TBD)$']
+  generic_patterns:                # movie-strand / container labels -> generic-slot (no single eTAM title)
+    - '^(REPEAT\s+)?MOVIES?(\s+CONTINUES)?$'
+    - 'PREVIOUS NIGHT MOVIE'
+    - 'MEGA MOVIE'
+    - '^STAR OF THE MONTH'
+    - '^THROWBACK THURSDAYS?$'
+    - '^SCREAMING SUNDAYS?$'
+    - '^CHILLER NIGHTS?$'
+    - '^BIG FAMILY NIGHTS?$'
+  aliases:                         # semantic pairs: accepted ONLY with time-slot evidence (time-slot inferred)
+    - {channel: "MBC ACTION", grid: "WRC HIGHLIGHTS (2026)", etam: "HIGHLIGHTS - FIA WORLD RALLY CHAMPIONSHIP", basis: "WRC = FIA World Rally Championship"}
+  paths:
+    program_map: data/processed/program_map.csv
+    review_xlsx: outputs/validation/program_matches_review.xlsx
+    review_csv: outputs/validation/program_matches_review.csv
+    report_md: outputs/validation/program_matching_report.md
