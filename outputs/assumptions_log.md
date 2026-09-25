@@ -1,0 +1,14 @@
+# Assumptions log
+
+Every default taken from docs/OPEN_ISSUES.md while a decision is pending, plus any other
+assumption made during the build. Each entry: date, phase, issue #, assumption, config key, impact.
+
+| Date | Phase | Issue | Assumption in force | Config key | Impact / flag |
+|---|---|---|---|---|---|
+| 2026-09-24 | 0 | #3 | Universe = 11,110,000 (inferred from reach/reach% in the Sep break file); official eTAM Universe pending | target.universe (universe_is_official: false) | All % KPIs scale with U; flagged in report |
+| 2026-09-24 | 0 | #5 | Flight = 4–31 Oct; 2 grid rows of week 20260927 ignored | flight.start/end | 2 rows dropped with logged reason |
+| 2026-09-24 | 0 | #9 | History = Sep 1–21 only (August, Sep 22–30 pending) | — | Forecast evidence thin; back-test uses Sep 1–14 -> 15–21 |
+| 2026-09-24 | 0 | #11 | Grid rates are gross USD, no discounts/commission | budget.rates_are | Budget = 1,000,000 gross |
+| 2026-09-24 | 1 | #5 | Ingestion refinement: the 2 grid rows of week 20260927 are KEPT in data/processed/grid.parquet with in_flight=False (not dropped) so no row is ever silently removed; the optimizer must filter on in_flight | flight.start/end | outputs/validation/grid_report.md reports the 2 rows explicitly |
+| 2026-09-24 | 1 | #4 | MBC 1 week 20261025 gap filled by copying MBC 1's most recent week it does have data for (found generically: the week MBC 1 is missing minus 7 days, not hard-coded 20261018/20261025) onto the missing week, same weekday+7d, new slot_id, is_synthetic=True, assumption='ASSUMPTION_MBC1_WK4'. 201 synthetic rows added (== week-3 MBC 1 row count). | grid.mbc1_week4 | data/processed/grid.parquet rows_synthetic=201; optimizer must treat these as lower-confidence (no real rate confirmation for that week, same rate/program assumed) |
+| 2026-09-24 | 1 | #12 | is_event flag implemented as: a (program, episode, broadcast_date) group airing on >=2 distinct channels with break start times within etam.event_simulcast_tolerance_min (10) minutes of each other. Confirms the known 19-Sep FIFA/NADEENA football special, and additionally finds it aired on **MBC 1 as well as MBC ACTION** (PRELIMINARY_FINDINGS only names MBC ACTION). A channel-day statistical-anomaly cross-check (mean rating_abs > etam.event_anomaly_ratio x that channel's own median channel-day mean) flagged one further borderline day, MBC ACTION 2026-09-04 (~3.37x), which was investigated and NOT classified as an event (no keyword/simulcast signal, elevation spread across many regular programmes) -- logged in outputs/validation/etam_breaks_report.md, not excluded from baselines. | etam.event_simulcast_tolerance_min, etam.event_anomaly_ratio | forecast.live_policy=slot_baseline_excl_events should exclude the 16 is_event=True rows (8 MBC 1 + 8 MBC ACTION) from both channels' baselines, not just MBC ACTION |

@@ -1,6 +1,6 @@
 # Nielsen data is confidential — never commit
 data/
-outputs/
+outputs/*
 !outputs/PROGRESS.md
 !outputs/assumptions_log.md
 *.xlsx
