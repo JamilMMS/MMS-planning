@@ -180,6 +180,41 @@ constraints:
   excluded_programs: []
   excluded_slots: []
 
+plan:                            # Phase 6 — optimizer (src/optimizer/plan; METHODOLOGY section 4)
+  forecast_path: data/processed/slot_forecast.parquet
+  conflicts_path: data/processed/slot_conflicts.parquet
+  forecast_meta_path: outputs/slot_forecast_for_app.json   # "meta.provisional" is copied into every plan
+  out_dir: outputs/plans
+  audience_column: aud_abs_p50   # per-spot audience used for impressions and reach
+  random_seed: 42                # CP-SAT seed; heuristics are deterministic (index tie-breaks)
+  weekly_share_basis: spend      # spend | budget: weekly_share_min/max are shares of the plan's spend (config comment
+                                  # "20-30% of spend") or of budget.total_usd
+  channel_share_basis: budget    # budget | spend: channel_min_share / channel_max_share are shares of budget.total_usd
+  program_cap_scope: channel     # channel | global: max_spots_per_program_per_day counts (channel, title_en, broadcast
+                                  # day) or (title_en, broadcast day) across channels ("MOVIE" is a strand on 3 channels)
+  # --- S3 max_impressions: exact MILP (OR-Tools CP-SAT) ------------------------------------------
+  milp_time_limit_sec: 300       # wall-clock safety cap; kept above the deterministic cap so a busy machine
+                                  # does not cut the search at a different point (determinism)
+  milp_deterministic_time: 60    # CP-SAT deterministic-time cap (makes a capped run reproducible)
+  milp_num_workers: 8            # with interleave_search the parallel search is deterministic
+  milp_interleave_search: true
+  # --- S1 / S2 / S4 reach objectives: lazy greedy + local search --------------------------------
+  greedy_cost_exponents: [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.25, 0.0]   # greedy family: score = gain / cost^alpha (1 = ratio greedy,
+                                  # 0 = pure gain); best plan kept (caps per channel/day bind before the budget)
+  local_search_max_iters: 3000   # move budget (accepted moves) per local search
+  local_search_max_sweeps: 50    # hard stop on full passes over the plan
+  local_search_min_gain: 1.0     # a move must improve the objective by more than this many people
+  local_search_shortlist_per_cell: 3   # swap targets per reach cell: top-N feasible by audience, by aud/cost, by cost
+  local_search_fill_shortlist_per_cell: 20  # drop-add refill: top-N feasible per cell by aud/cost
+  drop_add_min_cost_ratio: 2.0   # drop-add is tried for spots costing >= this x the cheapest candidate
+  upgrade_candidates_per_spot: 2 # upgrade move: larger same-channel units tried per plan spot (0 = off)
+  s2_reach1_tiebreak_weight: 0.01  # S2 greedy score = (d reach3+ + w x d reach1+)/cost (3+ gain is 0 for early spots)
+  s2_full_refresh_every: 25      # S2 greedy: recompute every score after this many picks (reach 3+ is not submodular)
+  floor_lambda_start: 0.01       # TRP / impressions floors: greedy score (d obj + lambda x aud)/cost, lambda doubled
+  floor_lambda_max: 10000.0      #   from start until the floor is met (<= max), then bisected
+  floor_lambda_bisect_steps: 10
+  frontier_trp_floors: [0.0, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99, 1.00]   # S1 with min TRP % = floor x S3's TRP %
+
 frontier:
   budget_levels: [0.25, 0.50, 0.75, 1.00, 1.25]
 

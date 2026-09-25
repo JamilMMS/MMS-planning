@@ -29,3 +29,9 @@ assumption made during the build. Each entry: date, phase, issue #, assumption, 
 | 2026-09-25 | 4 | #9 | No seasonality / trend (forecast.seasonality_trend=false): September level assumed for October [forecast:season] | forecast.seasonality_trend | revisit when August lands |
 | 2026-09-25 | 4 | — | Forecast is PROVISIONAL: built on program_map.csv before Gate 2 sign-off; re-run after corrections [forecast:provisional] | — | meta.provisional=true |
 | 2026-09-25 | 4 | back-test | forecast.low_sample_estimator set to `mean` for ACTION/MAX (zero-inflated: median=0, trimmed mean 47% below mean); chosen by back-test plan-level error (-2.7% vs -3.0%) | forecast.low_sample_estimator | ACTION/MAX forecasts ~2x higher than trimmed mean; bias +6.5% vs -30% |
+| 2026-09-25 | 6 | — | Weekly phasing: flight weeks = 7-day blocks from flight.start; each week's spend within [0.2, 0.3] x the plan's spend [plan:weeks] | plan.weekly_share_basis | config comment says '% of spend' |
+| 2026-09-25 | 6 | #7 | Channel min/max shares are shares of the budget (budget.total_usd) [plan:channels] | plan.channel_share_basis | every channel >= its minimum |
+| 2026-09-25 | 6 | — | max_spots_per_program_per_day counts (title_en, broadcast day) per channel (generic strands such as MOVIE air on several channels) [plan:progcap] | plan.program_cap_scope | — |
+| 2026-09-25 | 6 | — | S3 MILP objective uses the forecast audience rounded to whole persons (reported impressions use full precision) [plan:s3] | plan.milp_* | < 0.5 person per spot |
+| 2026-09-25 | 6 | #8 | Scenario reach figures are ESTIMATE (model); plans optimised on the p50 forecast [plan:reach] | reach.mode, plan.audience_column | sensitivity k ±0.3 |
+| 2026-09-25 | 6 | — | Plans built on the PROVISIONAL forecast (pre Gate 2); re-run after the forecast is final [plan:provisional] | — | run_metadata.forecast_provisional=true |
